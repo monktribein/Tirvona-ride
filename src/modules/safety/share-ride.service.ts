@@ -205,8 +205,28 @@ export class ShareRideService implements OnModuleInit {
     return { active };
   }
 
-  /** The public, unauthenticated read. */
-  async publicView(token: string): Promise<SharedRideView> {
+  /**
+   * The incident an SOS link belongs to, for the audio endpoints. Any other
+   * kind of link (an ordinary share link) is "not found": it never reaches
+   * audio. An ended or revoked link fails the same way as the status page.
+   */
+  async sosIdForLink(token: string): Promise<Types.ObjectId> {
+    const { link } = await this.activeLink(token);
+    if (link.purpose !== "SOS" || !link.sosEventId) throw linkNotFound();
+    return link.sosEventId;
+  }
+
+  /** The incident of an SOS link the page was already allowed to open; else undefined. */
+  async sosIdIfSosLink(token: string): Promise<Types.ObjectId | undefined> {
+    try {
+      return await this.sosIdForLink(token);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** The link behind a token, if it is still valid. 404 / 410 otherwise. */
+  private async activeLink(token: string) {
     // Cheap shape check first: never hash or query obvious garbage.
     if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) throw linkNotFound();
     const link = await this.tokenModel
@@ -223,6 +243,12 @@ export class ShareRideService implements OnModuleInit {
       this.graceMinutes,
     );
     if (Date.now() > expiresAt.getTime()) throw linkExpired();
+    return { link, ride, expiresAt };
+  }
+
+  /** The public, unauthenticated read. */
+  async publicView(token: string): Promise<SharedRideView> {
+    const { link, ride, expiresAt } = await this.activeLink(token);
 
     void this.tokenModel
       .updateOne(

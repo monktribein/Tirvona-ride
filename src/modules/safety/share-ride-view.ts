@@ -18,7 +18,15 @@ export type SharedRideStatus =
  * customer (name, phone, email), the driver's phone and surname, the ride
  * id, fares and payment, OTPs, and any internal id.
  */
+export interface SharedAudioView {
+  state: "NONE" | "RECORDING" | "STOPPED" | "INTERRUPTED" | "UNAVAILABLE";
+  /** Seconds of audio saved so far. */
+  seconds: number;
+}
+
 export interface SharedRideView {
+  /** Only on an SOS tracking link: the phone's microphone recording. */
+  audio?: SharedAudioView;
   status: SharedRideStatus;
   statusLabel: string;
   statusMessage: string;

@@ -3,6 +3,7 @@ import type { INestApplication } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import compression from "compression";
+import { raw } from "express";
 import type { Express } from "express";
 import helmet from "helmet";
 import { ApiExceptionFilter } from "./common/filters/api-exception.filter";
@@ -19,6 +20,13 @@ export function configureApp(app: INestApplication): void {
   app.use(requestIdMiddleware);
   app.use(helmet());
   app.use(compression());
+  // SOS audio chunks arrive as raw PCM bytes (the JSON parser ignores them).
+  // Only this content type and only this path, and capped just above the
+  // largest chunk the SOS audio service accepts.
+  app.use(
+    `/${API_PREFIX}/v${API_DEFAULT_VERSION}/rides`,
+    raw({ type: "application/octet-stream", limit: "512kb" }),
+  );
   if (config.get<boolean>("trustProxy"))
     (app.getHttpAdapter().getInstance() as Express).set("trust proxy", 1);
 

@@ -27,6 +27,8 @@ import type {
   UpdateSosDto,
 } from "./dto/sos.dto";
 import { EmergencyContactsService } from "./emergency-contacts.service";
+import { SosAudioService } from "./sos-audio.service";
+import type { AdminSosAudio, SosAudioView } from "./sos-audio.service";
 import { SosContactAlertService } from "./sos-contact-alert.service";
 import type { SosContactStatus } from "./sos-contact-alert.service";
 import { ShareRideService } from "./share-ride.service";
@@ -66,6 +68,8 @@ export interface SosView {
   handled: boolean;
   /** Whether the emergency contacts were messaged on WhatsApp (no phone numbers). */
   contacts: SosContactStatus[];
+  /** What the server has stored of this phone's microphone recording. */
+  audio: SosAudioView;
 }
 
 export interface SosTriggerResult {
@@ -117,6 +121,8 @@ export interface AdminSosDetail extends AdminSosListItem {
   }>;
   /** True while the contacts' live-tracking link works. */
   trackingActive: boolean;
+  /** The microphone recording: state, length, who listened. */
+  audio: AdminSosAudio;
   resolutionNote?: string;
   handledBy: { id: string; name: string } | null;
   timeline: Array<{
@@ -201,6 +207,7 @@ export class SosService {
     private readonly notifications: NotificationsService,
     private readonly contactAlerts: SosContactAlertService,
     private readonly share: ShareRideService,
+    private readonly audio: SosAudioService,
     config: ConfigService,
   ) {
     this.graceMinutes = config.getOrThrow<number>("sosPostRideGraceMinutes");
@@ -757,6 +764,7 @@ export class SosService {
         at: entry.at,
       })),
       trackingActive: sos.isOpen && (await this.sosModelHasTracking(sos._id)),
+      audio: this.audio.adminView(sos, await this.adminNames(sos)),
       resolutionNote: sos.resolutionNote,
       handledBy: admin
         ? { id: admin._id.toString(), name: fullName(admin) }
@@ -830,7 +838,28 @@ export class SosService {
       resolvedAt: sos.resolvedAt,
       handled: sos.status !== SosStatus.TRIGGERED,
       contacts: SosContactAlertService.statusFor(sos),
+      audio: this.audio.viewOf(sos),
     };
+  }
+
+  /** Names of the admins who listened to the recording. */
+  private async adminNames(
+    sos: SosEventDocument,
+  ): Promise<Map<string, string>> {
+    const ids = [
+      ...new Set(
+        sos.audioAccess
+          .map((entry) => entry.adminId?.toString())
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    if (ids.length === 0) return new Map();
+    const admins = await this.userModel
+      .find({ _id: { $in: ids.map((id) => new Types.ObjectId(id)) } })
+      .select("firstName lastName")
+      .lean()
+      .exec();
+    return new Map(admins.map((user) => [user._id.toString(), fullName(user)]));
   }
 
   private async sosModelHasTracking(sosId: Types.ObjectId): Promise<boolean> {

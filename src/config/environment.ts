@@ -136,6 +136,10 @@ export interface Environment {
   sosContactUpdateMinSeconds: number;
   sosContactUpdateMax: number;
   sosContactRetryDelayMs: number;
+  // SOS microphone recording (docs/safety/sos-audio.md)
+  sosAudioEnabled: boolean;
+  sosAudioRetentionDays: number;
+  sosAudioMaxSeconds: number;
   whatsappSosTemplateName: string;
   whatsappSosUpdateTemplateName: string;
   whatsappSosTemplateLanguage: string;
@@ -514,6 +518,13 @@ export const environmentFrom = (env: RawEnvironment): Environment => ({
   sosContactUpdateMax: integer(env.SOS_CONTACT_UPDATE_MAX, 8),
   // Pause before retrying a WhatsApp send that failed for a transient reason (×attempt).
   sosContactRetryDelayMs: integer(env.SOS_CONTACT_RETRY_DELAY_MS, 1500),
+  // The phone records the microphone while an SOS is open and uploads it in
+  // short chunks. Kept this many days (then deleted by a TTL index); one
+  // incident accepts at most this many seconds (a runaway client cannot fill
+  // the database).
+  sosAudioEnabled: boolean(env.SOS_AUDIO_ENABLED, true),
+  sosAudioRetentionDays: integer(env.SOS_AUDIO_RETENTION_DAYS, 90),
+  sosAudioMaxSeconds: integer(env.SOS_AUDIO_MAX_SECONDS, 4 * 60 * 60),
   whatsappSosTemplateName: (
     env.WHATSAPP_SOS_TEMPLATE_NAME || "tirvona_sos_alert"
   ).trim(),
@@ -694,6 +705,8 @@ const POSITIVE_INTEGERS = [
   "SOS_CONTACT_UPDATE_MIN_SECONDS",
   "SOS_CONTACT_UPDATE_MAX",
   "SOS_CONTACT_RETRY_DELAY_MS",
+  "SOS_AUDIO_RETENTION_DAYS",
+  "SOS_AUDIO_MAX_SECONDS",
   "SHARE_RIDE_MAX_HOURS",
   "SHARE_RIDE_GRACE_MINUTES",
   "PLACES_TIMEOUT_MS",

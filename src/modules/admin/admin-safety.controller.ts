@@ -5,12 +5,17 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseIntPipe,
   Patch,
   Post,
   Query,
+  Req,
+  Res,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
+import type { Request, Response } from "express";
+import { Types } from "mongoose";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import { Roles } from "../../common/decorators/roles.decorator";
 import { ok } from "../../common/http/api-response";
@@ -30,7 +35,13 @@ import {
   UpdateComplaintDto,
 } from "../complaints/dto/complaint.dto";
 import type { Page } from "../rides/rides.service";
+import {
+  AudioChunkListQueryDto,
+  AudioDownloadQueryDto,
+} from "../safety/dto/sos-audio.dto";
 import { ListSosQueryDto, UpdateSosDto } from "../safety/dto/sos.dto";
+import { SosAudioService } from "../safety/sos-audio.service";
+import type { AudioChunkList } from "../safety/sos-audio.service";
 import { SosService } from "../safety/sos.service";
 import type {
   AdminSosDetail,
@@ -43,7 +54,10 @@ import type {
 @Roles(UserRole.ADMIN)
 @Controller({ path: "admin/sos", version: "1" })
 export class AdminSosController {
-  constructor(private readonly sos: SosService) {}
+  constructor(
+    private readonly sos: SosService,
+    private readonly audio: SosAudioService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: "SOS incidents (filter by status, or open=true)" })
@@ -81,6 +95,67 @@ export class AdminSosController {
     @Body() dto: UpdateSosDto,
   ): Promise<ApiSuccessBody<AdminSosDetail>> {
     return ok(await this.sos.adminUpdate(admin.userId, id, dto));
+  }
+
+  // ── Microphone recording (docs/safety/sos-audio.md) ──────────────────
+
+  @Get(":id/audio/chunks")
+  @ApiOperation({
+    summary:
+      "Chunks of the SOS recording: after=<seq>, or tail=<n> for the live edge",
+  })
+  async audioChunks(
+    @CurrentUser() admin: AuthenticatedUser,
+    @Param("id", ParseObjectIdPipe) id: string,
+    @Query() query: AudioChunkListQueryDto,
+  ): Promise<ApiSuccessBody<AudioChunkList>> {
+    const sosId = new Types.ObjectId(id);
+    // Starting to listen (not each poll) is what is logged.
+    if (query.tail !== undefined)
+      await this.audio.logAccess(
+        sosId,
+        { actor: "ADMIN", adminId: admin.userId },
+        "LIVE",
+      );
+    return ok(await this.audio.listChunks(sosId, query));
+  }
+
+  @Get(":id/audio/chunks/:seq")
+  @ApiOperation({ summary: "One chunk of the SOS recording as a WAV file" })
+  async audioChunk(
+    @Param("id", ParseObjectIdPipe) id: string,
+    @Param("seq", ParseIntPipe) seq: number,
+    @Res() response: Response,
+  ): Promise<void> {
+    const wav = await this.audio.chunkWav(new Types.ObjectId(id), seq);
+    response.setHeader("Content-Type", "audio/wav");
+    response.setHeader("Cache-Control", "no-store");
+    response.setHeader("Content-Length", String(wav.length));
+    response.end(wav);
+  }
+
+  @Get(":id/audio/recording")
+  @ApiOperation({
+    summary:
+      "The SOS recording so far as one WAV file (Range supported; ?download=1 saves it)",
+  })
+  async audioRecording(
+    @CurrentUser() admin: AuthenticatedUser,
+    @Param("id", ParseObjectIdPipe) id: string,
+    @Query() query: AudioDownloadQueryDto,
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<void> {
+    const sosId = new Types.ObjectId(id);
+    const download = query.download === "1";
+    await this.audio.logAccess(
+      sosId,
+      { actor: "ADMIN", adminId: admin.userId },
+      download ? "DOWNLOAD" : "PLAYBACK",
+    );
+    await this.audio.sendWav(sosId, request.headers.range, response, {
+      filename: download ? `sos-${id}.wav` : undefined,
+    });
   }
 
   @Post(":id/notify-contacts")

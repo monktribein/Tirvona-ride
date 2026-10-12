@@ -1,0 +1,63 @@
+name: Deploy Tirvona Ride API
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tirvona-ride-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 20m
+          script: |
+            set -eu
+
+            cd /var/www/tirvona-ride
+
+            echo "Fetching latest code..."
+            git fetch origin main
+            git checkout main
+            git pull --ff-only origin main
+
+            echo "Installing dependencies..."
+            npm ci
+
+            echo "Building application..."
+            npm run build
+
+            echo "Restarting only Tirvona Ride API..."
+            NODE_ENV=production pm2 restart tirvona-ride-api --update-env
+
+            pm2 save
+
+            echo "Checking API health..."
+            for i in $(seq 1 10); do
+              if curl -fsS https://apiride.tirvona.com/api/v1/health; then
+                echo ""
+                echo "Deployment successful!"
+                exit 0
+              fi
+              sleep 3
+            done
+
+            echo "Health check failed!"
+            pm2 logs tirvona-ride-api --lines 50 --nostream
+            exit 1

@@ -1,4 +1,4 @@
-import type { SharedRideView } from "./share-ride-view";
+import type { SharedAudioView, SharedRideView } from "./share-ride-view";
 
 /**
  * The read-only page a share link opens. Rendered on the server from the
@@ -48,7 +48,58 @@ const STYLE = `
   footer { text-align:center; color:var(--muted); font-size:12px; margin-top:20px; }
 `;
 
-function layout(title: string, body: string, refreshSeconds?: number): string {
+const AUDIO_STYLE = `
+  button.listen { display:block; width:100%; border:0; cursor:pointer; font:inherit; font-weight:700; text-align:center; background:#B91C1C; color:#fff; border-radius:12px; padding:12px; margin:10px 0 6px; }
+  audio { width:100%; margin-top:8px; }
+  .rec { display:inline-block; font-size:12px; font-weight:700; color:#B91C1C; background:#FEE2E2; border-radius:999px; padding:2px 10px; margin-bottom:8px; }
+  .rec.idle { color:var(--muted); background:#EEF0F3; }
+`;
+
+const SCRIPT_PATH = "/api/v1/shared-rides/assets/sos-audio.js";
+const AUDIO_PATH = (token: string): string =>
+  `/api/v1/shared-rides/${encodeURIComponent(token)}/audio`;
+
+function duration(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return minutes > 0 ? `${minutes} min ${rest} s` : `${rest} s`;
+}
+
+/** The microphone card of an SOS tracking page. */
+function audioCard(token: string, audio: SharedAudioView): string {
+  const recording = audio.state === "RECORDING";
+  const headline = recording
+    ? `<span class="rec">● RECORDING</span>`
+    : `<span class="rec idle">${audio.state === "NONE" ? "NO AUDIO YET" : "AUDIO SAVED"}</span>`;
+  const detail =
+    audio.state === "UNAVAILABLE"
+      ? "The phone could not record audio. Call them if you can."
+      : audio.state === "NONE"
+        ? "No audio has arrived from the phone yet. This page checks again every 20 seconds."
+        : audio.state === "INTERRUPTED"
+          ? `Audio stopped arriving (phone offline?). ${duration(audio.seconds)} saved so far.`
+          : `${duration(audio.seconds)} saved so far.`;
+  return `<section class="card" id="sos-audio" data-base="${escapeHtml(AUDIO_PATH(token))}">
+  <p class="label">Sound from their phone</p>
+  ${headline}
+  <p class="muted">${escapeHtml(detail)}</p>
+  ${recording ? `<button class="listen" id="sos-live" type="button">Listen live</button><p class="muted" id="sos-live-note" style="text-align:center"></p>` : ""}
+  ${
+    audio.seconds > 0
+      ? `<audio id="sos-player" controls preload="none" src="${escapeHtml(AUDIO_PATH(token))}.wav"></audio>
+  <p class="muted" style="margin-top:6px">The recording so far. It is shared with you for their safety — please do not forward this page.</p>`
+      : ""
+  }
+</section>
+<script src="${SCRIPT_PATH}" defer></script>`;
+}
+
+function layout(
+  title: string,
+  body: string,
+  refreshSeconds?: number,
+  extraStyle = "",
+): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -58,7 +109,7 @@ function layout(title: string, body: string, refreshSeconds?: number): string {
 <meta name="referrer" content="no-referrer">
 ${refreshSeconds ? `<meta http-equiv="refresh" content="${refreshSeconds}">` : ""}
 <title>${escapeHtml(title)} · Tirvona Rides</title>
-<style>${STYLE}</style>
+<style>${STYLE}${extraStyle}</style>
 </head>
 <body><main>
 <header><div class="brand">Tirvona <span>Rides</span></div></header>
@@ -71,6 +122,8 @@ ${body}
 export function renderSharedRidePage(
   view: SharedRideView,
   timeZone: string,
+  /** Set on an SOS tracking link: the token the audio URLs are built from. */
+  sosToken?: string,
 ): string {
   const driver = view.driver
     ? `<p class="label">Driver</p><p class="value">${escapeHtml(view.driver.firstName)}${
@@ -88,7 +141,9 @@ export function renderSharedRidePage(
     ? `<a class="button" href="${escapeHtml(mapsLink(view.driverLocation.latitude, view.driverLocation.longitude))}" rel="noopener noreferrer" target="_blank">See vehicle on map</a>
        <p class="muted" style="text-align:center;margin-top:6px">Position at ${escapeHtml(time(view.driverLocation.updatedAt, timeZone))}</p>`
     : "";
+  const audio = sosToken && view.audio ? audioCard(sosToken, view.audio) : "";
   const body = `
+${audio}
 <section class="card">
   <span class="live ${view.isLive ? "" : "ended"}">${view.isLive ? "● LIVE" : "ENDED"}</span>
   <h1 class="status">${escapeHtml(view.statusLabel)}</h1>
@@ -106,7 +161,14 @@ export function renderSharedRidePage(
 <p class="muted" style="text-align:center">Last updated ${escapeHtml(time(view.lastUpdatedAt, timeZone))}${
     view.isLive ? " · refreshes automatically" : ""
   }</p>`;
-  return layout(view.statusLabel, body, view.isLive ? 20 : undefined);
+  // With the audio card the page's own script does the refreshing, so it
+  // never cuts off someone who is listening; without JavaScript it falls back
+  // to a plain refresh.
+  const refresh = audio ? undefined : view.isLive ? 20 : undefined;
+  const html = layout(view.statusLabel, body, refresh, audio ? AUDIO_STYLE : "");
+  return audio
+    ? html.replace("</head>", `<noscript><meta http-equiv="refresh" content="20"></noscript>\n</head>`)
+    : html;
 }
 
 export function renderShareErrorPage(expired: boolean): string {

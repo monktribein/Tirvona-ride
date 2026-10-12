@@ -6,19 +6,24 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseIntPipe,
   Patch,
   Post,
+  Put,
+  Query,
+  Req,
   Res,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
-import type { Response } from "express";
+import type { Request, Response } from "express";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import { Public } from "../../common/decorators/public.decorator";
 import { Roles } from "../../common/decorators/roles.decorator";
 import { ok } from "../../common/http/api-response";
 import type { ApiSuccessBody } from "../../common/http/api-response";
+import { apiBadRequest } from "../../common/exceptions/api.exception";
 import { ParseObjectIdPipe } from "../../common/pipes/parse-object-id.pipe";
 import type { AuthenticatedUser } from "../../common/types/jwt-payload";
 import { UserRole } from "../../common/types/user-role.enum";
@@ -26,7 +31,14 @@ import {
   CreateEmergencyContactDto,
   UpdateEmergencyContactDto,
 } from "./dto/emergency-contact.dto";
+import {
+  AudioChunkListQueryDto,
+  SosAudioStateDto,
+} from "./dto/sos-audio.dto";
 import { TriggerSosDto } from "./dto/sos.dto";
+import { SOS_AUDIO_SCRIPT } from "./share-audio-script";
+import { SosAudioService } from "./sos-audio.service";
+import type { AudioChunkList, SosAudioView } from "./sos-audio.service";
 import { EmergencyContactsService } from "./emergency-contacts.service";
 import type { EmergencyContactView } from "./emergency-contacts.service";
 import { ShareRideService } from "./share-ride.service";
@@ -90,7 +102,57 @@ export class RideSafetyController {
   constructor(
     private readonly sos: SosService,
     private readonly share: ShareRideService,
+    private readonly audio: SosAudioService,
   ) {}
+
+  @Put(":id/sos/:sosId/audio/:seq")
+  @Roles(UserRole.CUSTOMER, UserRole.DRIVER)
+  // One chunk every ~5 s per phone; generous so retries after a bad patch of
+  // network (a backlog uploaded at once) are never throttled.
+  @Throttle({ default: { limit: 600, ttl: 60_000 } })
+  @ApiOperation({
+    summary:
+      "Upload one chunk of the SOS microphone recording (raw 16-bit mono 16 kHz PCM, application/octet-stream). Repeating a chunk is safe.",
+  })
+  async uploadAudio(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id", ParseObjectIdPipe) id: string,
+    @Param("sosId", ParseObjectIdPipe) sosId: string,
+    @Param("seq", ParseIntPipe) seq: number,
+    @Req() request: Request,
+  ): Promise<ApiSuccessBody<SosAudioView>> {
+    if (seq < 0 || seq > 100_000)
+      throw apiBadRequest("Invalid chunk number", "SOS_AUDIO_INVALID");
+    // The body is a Buffer only for application/octet-stream (app.setup.ts).
+    return ok(
+      await this.audio.ingest(user, id, sosId, seq, request.body as unknown),
+    );
+  }
+
+  @Post(":id/sos/:sosId/audio/state")
+  @Roles(UserRole.CUSTOMER, UserRole.DRIVER)
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @ApiOperation({
+    summary:
+      "Say what the microphone is doing: recording, stopped, permission denied, failed",
+  })
+  async audioState(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id", ParseObjectIdPipe) id: string,
+    @Param("sosId", ParseObjectIdPipe) sosId: string,
+    @Body() dto: SosAudioStateDto,
+  ): Promise<ApiSuccessBody<SosAudioView>> {
+    return ok(
+      await this.audio.reportState(
+        user,
+        id,
+        sosId,
+        dto.state,
+        dto.consentVersion,
+      ),
+    );
+  }
 
   @Post(":id/sos")
   @Roles(UserRole.CUSTOMER, UserRole.DRIVER)
@@ -163,9 +225,83 @@ export class SharedRidesController {
 
   constructor(
     private readonly share: ShareRideService,
+    private readonly audio: SosAudioService,
     config: ConfigService,
   ) {
     this.timeZone = config.getOrThrow<string>("appTimeZone");
+  }
+
+  /** The status view; on an SOS link it also carries the recording's state. */
+  private async viewFor(
+    token: string,
+  ): Promise<{ view: SharedRideView; isSos: boolean }> {
+    const view = await this.share.publicView(token);
+    const sosId = await this.share.sosIdIfSosLink(token);
+    if (!sosId) return { view, isSos: false };
+    return {
+      view: { ...view, audio: await this.audio.sharedView(sosId) },
+      isSos: true,
+    };
+  }
+
+  // ── Audio on an SOS link (declared before ":token") ──────────────────
+
+  @Get("assets/sos-audio.js")
+  @ApiOperation({ summary: "The audio player script of the SOS tracking page" })
+  script(@Res({ passthrough: true }) response: Response): string {
+    response.setHeader("Content-Type", "application/javascript; charset=utf-8");
+    response.setHeader("Cache-Control", "public, max-age=300");
+    return SOS_AUDIO_SCRIPT;
+  }
+
+  @Get(":token/audio/chunks")
+  @Throttle({ default: { limit: 240, ttl: 60_000 } })
+  @ApiOperation({
+    summary: "Chunks of the SOS recording: after=<seq>, or tail=<n> for the live edge",
+  })
+  async audioChunks(
+    @Param("token") token: string,
+    @Query() query: AudioChunkListQueryDto,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<ApiSuccessBody<AudioChunkList>> {
+    this.privateHeaders(response);
+    const sosId = await this.share.sosIdForLink(token);
+    // Starting to listen (not each poll) is what is logged.
+    if (query.tail !== undefined)
+      await this.audio.logAccess(sosId, { actor: "CONTACT" }, "LIVE");
+    return ok(await this.audio.listChunks(sosId, query));
+  }
+
+  @Get(":token/audio/chunks/:seq")
+  @Throttle({ default: { limit: 240, ttl: 60_000 } })
+  @ApiOperation({ summary: "One chunk of the SOS recording as a WAV file" })
+  async audioChunk(
+    @Param("token") token: string,
+    @Param("seq", ParseIntPipe) seq: number,
+    @Res() response: Response,
+  ): Promise<void> {
+    this.privateHeaders(response);
+    const sosId = await this.share.sosIdForLink(token);
+    const wav = await this.audio.chunkWav(sosId, seq);
+    response.setHeader("Content-Type", "audio/wav");
+    response.setHeader("Content-Length", String(wav.length));
+    response.end(wav);
+  }
+
+  @Get(":token/audio.wav")
+  @Throttle({ default: { limit: 240, ttl: 60_000 } })
+  @ApiOperation({
+    summary: "The SOS recording so far as one WAV file (Range supported)",
+  })
+  async audioRecording(
+    @Param("token") token: string,
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<void> {
+    this.privateHeaders(response);
+    const sosId = await this.share.sosIdForLink(token);
+    await this.audio.logAccess(sosId, { actor: "CONTACT" }, "PLAYBACK");
+    await this.audio.sendWav(sosId, request.headers.range, response);
   }
 
   // Declared before ":token" so "view" is never read as a token.
@@ -178,9 +314,11 @@ export class SharedRidesController {
     response.setHeader("Content-Type", "text/html; charset=utf-8");
     this.privateHeaders(response);
     try {
+      const { view, isSos } = await this.viewFor(token);
       return renderSharedRidePage(
-        await this.share.publicView(token),
+        view,
         this.timeZone,
+        isSos ? token : undefined,
       );
     } catch (error) {
       const status = (error as { getStatus?: () => number }).getStatus?.();
@@ -199,7 +337,7 @@ export class SharedRidesController {
     @Res({ passthrough: true }) response: Response,
   ): Promise<ApiSuccessBody<SharedRideView>> {
     this.privateHeaders(response);
-    return ok(await this.share.publicView(token));
+    return ok((await this.viewFor(token)).view);
   }
 
   private privateHeaders(response: Response): void {

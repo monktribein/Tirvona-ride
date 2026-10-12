@@ -23,8 +23,13 @@ import {
   RideShareToken,
   RideShareTokenSchema,
 } from "./schemas/ride-share-token.schema";
+import {
+  SosAudioChunk,
+  SosAudioChunkSchema,
+} from "./schemas/sos-audio-chunk.schema";
 import { SosEvent, SosEventSchema } from "./schemas/sos-event.schema";
 import { ShareRideService } from "./share-ride.service";
+import { SosAudioService } from "./sos-audio.service";
 import { SosContactAlertService } from "./sos-contact-alert.service";
 import { SosService } from "./sos.service";
 
@@ -35,6 +40,7 @@ import { SosService } from "./sos.service";
   imports: [
     MongooseModule.forFeature([
       { name: SosEvent.name, schema: SosEventSchema },
+      { name: SosAudioChunk.name, schema: SosAudioChunkSchema },
       { name: EmergencyContact.name, schema: EmergencyContactSchema },
       { name: RideShareToken.name, schema: RideShareTokenSchema },
       { name: Ride.name, schema: RideSchema },
@@ -55,7 +61,13 @@ import { SosService } from "./sos.service";
     SosService,
     ShareRideService,
     SosContactAlertService,
+    SosAudioService,
   ],
-  exports: [SosService, EmergencyContactsService, SosContactAlertService],
+  exports: [
+    SosService,
+    EmergencyContactsService,
+    SosContactAlertService,
+    SosAudioService,
+  ],
 })
 export class SafetyModule {}

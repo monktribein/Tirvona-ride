@@ -76,6 +76,71 @@ export class SosContactAlert {
 }
 const SosContactAlertSchema = SchemaFactory.createForClass(SosContactAlert);
 
+/**
+ * What the server has actually stored of the microphone recording. Counters
+ * only move when a chunk is saved, so "recording confirmed" always means
+ * audio is in the database. The audio bytes live in `sos_audio_chunks`.
+ */
+@Schema({ _id: false })
+export class SosAudioInfo {
+  @Prop({ required: true, default: 0 })
+  chunkCount!: number;
+
+  @Prop({ required: true, default: 0 })
+  bytes!: number;
+
+  @Prop({ required: true, default: 0 })
+  durationMs!: number;
+
+  @Prop({ required: true, default: 16_000 })
+  sampleRate!: number;
+
+  /** Highest chunk number stored; with `chunkCount` it shows gaps (lost chunks). */
+  @Prop()
+  lastSeq?: number;
+
+  @Prop()
+  firstChunkAt?: Date;
+
+  @Prop()
+  lastChunkAt?: Date;
+
+  /** The phone ended the recording on purpose. */
+  @Prop()
+  stoppedAt?: Date;
+
+  /** What the phone last said about its microphone. */
+  @Prop({ enum: ["RECORDING", "STOPPED", "PERMISSION_DENIED", "FAILED"] })
+  deviceState?: "RECORDING" | "STOPPED" | "PERMISSION_DENIED" | "FAILED";
+
+  /** Version of the recording notice the person accepted in the app. */
+  @Prop()
+  consentVersion?: string;
+
+  /** When the chunks are deleted (a TTL index on the chunks does it). */
+  @Prop()
+  retentionUntil?: Date;
+}
+const SosAudioInfoSchema = SchemaFactory.createForClass(SosAudioInfo);
+
+/** Who listened to the recording: the safety team and the contacts' link are both logged. */
+@Schema({ _id: false })
+export class SosAudioAccess {
+  @Prop({ required: true, enum: ["ADMIN", "CONTACT"] })
+  actor!: "ADMIN" | "CONTACT";
+
+  /** LIVE: listened near-live. PLAYBACK: played the recording. DOWNLOAD: saved the file. */
+  @Prop({ required: true, enum: ["LIVE", "PLAYBACK", "DOWNLOAD"] })
+  kind!: "LIVE" | "PLAYBACK" | "DOWNLOAD";
+
+  @Prop({ type: SchemaTypes.ObjectId, ref: "User" })
+  adminId?: Types.ObjectId;
+
+  @Prop({ required: true })
+  at!: Date;
+}
+const SosAudioAccessSchema = SchemaFactory.createForClass(SosAudioAccess);
+
 @Schema({ _id: false })
 export class SosTimelineEntry {
   @Prop({ required: true, enum: SosStatus })
@@ -176,6 +241,14 @@ export class SosEvent {
    */
   @Prop({ select: false })
   trackingToken?: string;
+
+  /** The microphone recording (docs/safety/sos-audio.md). */
+  @Prop({ type: SosAudioInfoSchema, default: () => ({}) })
+  audio!: SosAudioInfo;
+
+  /** Newest last, capped. */
+  @Prop({ type: [SosAudioAccessSchema], default: [] })
+  audioAccess!: SosAudioAccess[];
 
   @Prop({ required: true })
   triggeredAt!: Date;
