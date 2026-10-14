@@ -72,6 +72,13 @@ export class DriverProfile {
   @Prop()
   rejectionReason?: string;
 
+  /**
+   * Set when an admin approved the driver by hand, bypassing the KYC
+   * submission requirement. Cleared by a normal approval.
+   */
+  @Prop()
+  manualApprovalReason?: string;
+
   // ── Suspension (Phase 7) ──────────────────────────────────────────────
   @Prop({ trim: true })
   suspensionReason?: string;

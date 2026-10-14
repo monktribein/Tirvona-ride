@@ -38,6 +38,8 @@ export interface DriverSummary {
   circuitEligible: boolean;
   approvedAt?: Date;
   rejectionReason?: string;
+  /** Present when an admin approved without a KYC submission. */
+  manualApprovalReason?: string;
   suspensionReason?: string;
   suspendedAt?: Date;
   createdAt?: Date;
@@ -94,6 +96,7 @@ export class DriversService {
       circuitEligible: driver.circuitEligible !== false,
       approvedAt: driver.approvedAt,
       rejectionReason: driver.rejectionReason,
+      manualApprovalReason: driver.manualApprovalReason,
       suspensionReason: driver.suspensionReason,
       suspendedAt: driver.suspendedAt,
       createdAt: driver.get("createdAt") as Date | undefined,
@@ -425,6 +428,37 @@ export class DriversService {
     driver.approvedAt = new Date();
     driver.approvedBy = new Types.ObjectId(adminUserId);
     driver.rejectionReason = undefined;
+    driver.manualApprovalReason = undefined;
+    await driver.save();
+    return driver;
+  }
+
+  /**
+   * Admin override: approve a driver who has not submitted KYC (PENDING), or
+   * overrule an earlier rejection. Never touches SUSPENDED (use reinstate) or
+   * APPROVED drivers. The reason is stored on the profile for the record.
+   */
+  async approveManually(
+    driverId: string,
+    adminUserId: string,
+    reason: string,
+  ): Promise<DriverProfileDocument> {
+    const driver = await this.getById(driverId);
+    if (
+      driver.driverStatus !== DriverStatus.PENDING &&
+      driver.driverStatus !== DriverStatus.UNDER_REVIEW &&
+      driver.driverStatus !== DriverStatus.REJECTED
+    )
+      throw apiBadRequest(
+        `Cannot manually approve a driver in ${driver.driverStatus} status`,
+        "INVALID_STATUS_TRANSITION",
+      );
+
+    driver.driverStatus = DriverStatus.APPROVED;
+    driver.approvedAt = new Date();
+    driver.approvedBy = new Types.ObjectId(adminUserId);
+    driver.rejectionReason = undefined;
+    driver.manualApprovalReason = reason;
     await driver.save();
     return driver;
   }

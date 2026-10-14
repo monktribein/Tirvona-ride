@@ -134,6 +134,32 @@ export class AdminController {
     return ok(driver);
   }
 
+  @Patch("drivers/:id/manual-approve")
+  @ApiOperation({
+    summary:
+      "Approve a driver by hand without a KYC submission (pending, under review or rejected); reason is recorded",
+  })
+  async manualApprove(
+    @Param("id", ParseObjectIdPipe) id: string,
+    @Body() dto: AdminReasonDto,
+    @CurrentUser() admin: AuthenticatedUser,
+  ): Promise<ApiSuccessBody<DriverSummary>> {
+    const driver = await this.admin.approveDriverManually(
+      id,
+      admin.userId,
+      dto.reason,
+    );
+    await this.audit.record({
+      adminId: admin.userId,
+      action: "driver.manual_approve",
+      targetType: "DRIVER",
+      targetId: id,
+      targetLabel: driver.driverCode,
+      reason: dto.reason,
+    });
+    return ok(driver);
+  }
+
   @Patch("drivers/:id/reject")
   @ApiOperation({ summary: "Reject a driver under review" })
   async reject(

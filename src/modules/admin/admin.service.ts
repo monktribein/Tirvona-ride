@@ -225,6 +225,24 @@ export class AdminService {
     return this.drivers.toSummary(driver);
   }
 
+  async approveDriverManually(
+    driverId: string,
+    adminUserId: string,
+    reason: string,
+  ): Promise<DriverSummary> {
+    const driver = await this.drivers.approveManually(
+      driverId,
+      adminUserId,
+      reason,
+    );
+    this.domainEvents.emit("driver.reviewed", {
+      driverId: driver._id.toString(),
+      userId: driver.userId.toString(),
+      approved: true,
+    });
+    return this.drivers.toSummary(driver);
+  }
+
   async rejectDriver(driverId: string, reason: string): Promise<DriverSummary> {
     const driver = await this.drivers.reject(driverId, reason);
     this.domainEvents.emit("driver.reviewed", {
