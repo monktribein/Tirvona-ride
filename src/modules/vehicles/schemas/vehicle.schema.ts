@@ -2,19 +2,27 @@ import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose";
 import { SchemaTypes, Types } from "mongoose";
 import type { HydratedDocument } from "mongoose";
 
-export enum VehicleType {
-  BIKE = "BIKE",
-  AUTO = "AUTO",
-  E_RICKSHAW = "E_RICKSHAW",
-  CAB = "CAB",
-}
+/**
+ * A vehicle type is the code of a ride type: the two are one and the same, so
+ * an admin who creates a ride type (e.g. "BUS") has created the vehicle type
+ * drivers register and that matching filters on. It is data, not an enum;
+ * RideTypesService#assertVehicleType checks that a code exists. The constant
+ * keeps the four seeded codes handy for seeds, defaults and tests.
+ */
+export type VehicleType = string;
+export const VehicleType = {
+  BIKE: "BIKE",
+  AUTO: "AUTO",
+  E_RICKSHAW: "E_RICKSHAW",
+  CAB: "CAB",
+} as const;
 
 @Schema({ timestamps: true, collection: "vehicles" })
 export class Vehicle {
   @Prop({ required: true, type: SchemaTypes.ObjectId, ref: "DriverProfile" })
   driverId!: Types.ObjectId;
 
-  @Prop({ required: true, enum: VehicleType })
+  @Prop({ required: true, uppercase: true, trim: true })
   vehicleType!: VehicleType;
 
   @Prop({ required: true, uppercase: true, trim: true })

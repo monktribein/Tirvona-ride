@@ -710,7 +710,7 @@ describe("Phase 7 — admin completion & hardening (e2e)", () => {
       );
     });
 
-    it("creates a new product on an existing vehicle type, and deactivates without deleting", async () => {
+    it("creates a new product that is its own vehicle type, and deactivates without deleting", async () => {
       await api()
         .post("/api/v1/admin/ride-types")
         .set(as("admin"))
@@ -718,7 +718,6 @@ describe("Phase 7 — admin completion & hardening (e2e)", () => {
           code: "AUTO_SHARE",
           displayName: "Auto Share",
           icon: "auto",
-          vehicleType: "AUTO",
           seatCapacity: 3,
           isActive: true,
         })
@@ -730,7 +729,6 @@ describe("Phase 7 — admin completion & hardening (e2e)", () => {
           code: "AUTO_SHARE",
           displayName: "Auto Share",
           icon: "auto",
-          vehicleType: "AUTO",
           seatCapacity: 3,
           isActive: true,
           pricing: {
@@ -743,9 +741,32 @@ describe("Phase 7 — admin completion & hardening (e2e)", () => {
         })
         .expect(201);
       expect(created.body.data).toMatchObject({
-        rideType: { code: "AUTO_SHARE", isActive: true },
+        rideType: {
+          code: "AUTO_SHARE",
+          vehicleType: "AUTO_SHARE",
+          isActive: true,
+        },
         pricing: { version: 1 },
       });
+      // The new product is immediately a vehicle type drivers can register,
+      // and a vehicle type cannot be chosen separately from the ride type.
+      const vehicleTypes = (
+        await api().get("/api/v1/vehicles/types").set(as("driverA")).expect(200)
+      ).body.data;
+      expect(vehicleTypes.map((type: { code: string }) => type.code)).toContain(
+        "AUTO_SHARE",
+      );
+      await api()
+        .post("/api/v1/admin/ride-types")
+        .set(as("admin"))
+        .send({
+          code: "AUTO_OTHER",
+          displayName: "Auto Other",
+          icon: "auto",
+          vehicleType: "AUTO",
+          seatCapacity: 3,
+        })
+        .expect(400);
       await api()
         .post("/api/v1/admin/ride-types")
         .set(as("admin"))
@@ -753,7 +774,6 @@ describe("Phase 7 — admin completion & hardening (e2e)", () => {
           code: "AUTO_SHARE",
           displayName: "Again",
           icon: "auto",
-          vehicleType: "AUTO",
           seatCapacity: 3,
         })
         .expect(409);

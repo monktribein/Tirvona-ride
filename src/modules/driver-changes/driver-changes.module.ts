@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { MongooseModule } from "@nestjs/mongoose";
 import { DriversModule } from "../drivers/drivers.module";
+import { RideTypesModule } from "../ride-types/ride-types.module";
 import { UsersModule } from "../users/users.module";
 import { VehiclesModule } from "../vehicles/vehicles.module";
 import {
@@ -25,6 +26,7 @@ import {
     ]),
     DriversModule,
     VehiclesModule,
+    RideTypesModule,
     UsersModule,
   ],
   controllers: [DriverChangesController, AdminDriverChangesController],

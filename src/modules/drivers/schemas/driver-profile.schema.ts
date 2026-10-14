@@ -5,7 +5,7 @@ import {
   GeoPoint,
   GeoPointSchema,
 } from "../../../common/schemas/geo-point.schema";
-import { VehicleType } from "../../vehicles/schemas/vehicle.schema";
+import type { VehicleType } from "../../vehicles/schemas/vehicle.schema";
 
 export enum DriverStatus {
   PENDING = "PENDING",
@@ -112,7 +112,7 @@ export class DriverProfile {
   @Prop({ type: SchemaTypes.ObjectId, ref: "Vehicle" })
   activeVehicleId?: Types.ObjectId;
 
-  @Prop({ enum: VehicleType })
+  @Prop()
   activeVehicleType?: VehicleType;
 
   /**

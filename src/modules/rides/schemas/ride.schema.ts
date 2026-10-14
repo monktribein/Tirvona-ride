@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose";
 import { SchemaTypes, Types } from "mongoose";
 import type { HydratedDocument } from "mongoose";
-import { VehicleType } from "../../vehicles/schemas/vehicle.schema";
+import type { VehicleType } from "../../vehicles/schemas/vehicle.schema";
 import { RideCompletionMode } from "../ride-completion";
 import { RidePaymentStatus } from "../ride-payment-status";
 import { RideActorType, RideStatus } from "../ride-state-machine";
@@ -221,7 +221,7 @@ export class RideVehicle {
   @Prop({ type: SchemaTypes.ObjectId, ref: "Vehicle" })
   vehicleId?: Types.ObjectId;
 
-  @Prop({ required: true, enum: VehicleType })
+  @Prop({ required: true })
   vehicleType!: VehicleType;
 
   @Prop({ required: true })
@@ -370,7 +370,7 @@ export class Ride {
   rideType!: string;
 
   /** Resolved from the ride type at booking; what matching filters on. */
-  @Prop({ required: true, enum: VehicleType })
+  @Prop({ required: true })
   vehicleType!: VehicleType;
 
   @Prop({ required: true, type: RideLocationSchema })

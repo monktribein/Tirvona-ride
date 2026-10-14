@@ -7,12 +7,14 @@ import {
   IsOptional,
   IsString,
   Length,
+  Matches,
   Max,
   Min,
 } from "class-validator";
 import { DriverStatus } from "../../drivers/schemas/driver-profile.schema";
 import { UserStatus } from "../../users/schemas/user.schema";
-import { VehicleType } from "../../vehicles/schemas/vehicle.schema";
+import { RIDE_TYPE_CODE_PATTERN } from "../../ride-types/schemas/ride-type.schema";
+import type { VehicleType } from "../../vehicles/schemas/vehicle.schema";
 
 const toBoolean = ({ value }: { value: unknown }) =>
   value === "true" ? true : value === "false" ? false : value;
@@ -68,9 +70,10 @@ export class AdminCustomersQueryDto extends PageQueryDto {
 }
 
 export class AdminVehiclesQueryDto extends PageQueryDto {
-  @ApiPropertyOptional({ enum: VehicleType })
+  @ApiPropertyOptional({ example: "CAB" })
   @IsOptional()
-  @IsEnum(VehicleType)
+  @IsString()
+  @Matches(RIDE_TYPE_CODE_PATTERN)
   vehicleType?: VehicleType;
 
   @ApiPropertyOptional()

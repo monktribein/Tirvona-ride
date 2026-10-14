@@ -2,7 +2,6 @@ import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { Type } from "class-transformer";
 import {
   IsBoolean,
-  IsEnum,
   IsInt,
   IsNumber,
   IsOptional,
@@ -13,9 +12,11 @@ import {
   Min,
   ValidateNested,
 } from "class-validator";
-import { VehicleType } from "../../vehicles/schemas/vehicle.schema";
 import { InitialDistanceDto } from "../../ride-config/dto/ride-config.dto";
-import { RIDE_TYPE_CODE_PATTERN } from "../schemas/ride-type.schema";
+import {
+  MAX_SEAT_CAPACITY,
+  RIDE_TYPE_CODE_PATTERN,
+} from "../schemas/ride-type.schema";
 
 /** Icon keys the mobile apps bundle; anything else would render a blank. */
 export const RIDE_TYPE_ICONS = [
@@ -25,6 +26,8 @@ export const RIDE_TYPE_ICONS = [
   "cab",
   "cab_xl",
   "premium",
+  "tempo",
+  "bus",
 ] as const;
 
 const MONEY = { allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 };
@@ -50,19 +53,11 @@ export class UpdateRideTypeDto {
   })
   icon?: string;
 
-  @ApiPropertyOptional({
-    enum: VehicleType,
-    description: "Which drivers serve it (applies to new bookings)",
-  })
-  @IsOptional()
-  @IsEnum(VehicleType)
-  vehicleType?: VehicleType;
-
   @ApiPropertyOptional()
   @IsOptional()
   @IsInt()
   @Min(1)
-  @Max(8)
+  @Max(MAX_SEAT_CAPACITY)
   seatCapacity?: number;
 
   @ApiPropertyOptional({
@@ -116,7 +111,11 @@ export class InitialTariffDto {
 }
 
 export class CreateRideTypeDto {
-  @ApiProperty({ example: "CAB_XL" })
+  @ApiProperty({
+    example: "BUS",
+    description:
+      "Also the vehicle type drivers register their vehicle under, so it can never change",
+  })
   @Matches(RIDE_TYPE_CODE_PATTERN, {
     message: "code must be 2–24 upper-case letters, digits or underscores",
   })
@@ -139,14 +138,10 @@ export class CreateRideTypeDto {
   })
   icon!: string;
 
-  @ApiProperty({ enum: VehicleType })
-  @IsEnum(VehicleType)
-  vehicleType!: VehicleType;
-
   @ApiProperty({ example: 4 })
   @IsInt()
   @Min(1)
-  @Max(8)
+  @Max(MAX_SEAT_CAPACITY)
   seatCapacity!: number;
 
   @ApiPropertyOptional({ default: 50 })

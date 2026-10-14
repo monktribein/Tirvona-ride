@@ -7,6 +7,7 @@ import {
   apiConflict,
   apiNotFound,
 } from "../../common/exceptions/api.exception";
+import { RideTypesService } from "../ride-types/ride-types.service";
 import { StorageService } from "../storage/storage.service";
 import { DocumentStatus } from "../../common/types/document-status.enum";
 import { DomainEventsService } from "../../infrastructure/events/domain-events.service";
@@ -159,6 +160,7 @@ export class DriverChangesService {
     @InjectModel(User.name) private readonly users: Model<User>,
     private readonly domainEvents: DomainEventsService,
     private readonly storage: StorageService,
+    private readonly rideTypes: RideTypesService,
   ) {}
 
   // ── Driver side ────────────────────────────────────────────────────────
@@ -228,6 +230,8 @@ export class DriverChangesService {
   ): Promise<DriverChangeView> {
     const driver = await this.requesterFor(userId);
     const vehicle = await this.activeVehicle(driver, dto.vehicleId);
+    if (dto.vehicleType !== undefined)
+      await this.rideTypes.assertVehicleType(dto.vehicleType);
     const requested: Record<string, unknown> = {};
     const current: Record<string, unknown> = {};
     for (const [apiField, schemaField] of Object.entries(VEHICLE_FIELDS)) {
@@ -298,7 +302,10 @@ export class DriverChangesService {
           .lean()
           .exec();
 
-    const filePath = await this.storage.put(file, { segment: "driver-changes", ownerId: driver._id.toHexString() });
+    const filePath = await this.storage.put(file, {
+      segment: "driver-changes",
+      ownerId: driver._id.toHexString(),
+    });
     try {
       return await this.upsertPending(driver, {
         kind: isVehicle

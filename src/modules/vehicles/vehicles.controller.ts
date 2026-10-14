@@ -24,6 +24,7 @@ import { apiBadRequest } from "../../common/exceptions/api.exception";
 import { ok } from "../../common/http/api-response";
 import type { ApiSuccessBody } from "../../common/http/api-response";
 import { documentUploadOptions } from "../../common/http/file-upload";
+import { RideTypesService } from "../ride-types/ride-types.service";
 import { StorageService } from "../storage/storage.service";
 import type { AuthenticatedUser } from "../../common/types/jwt-payload";
 import { UserRole } from "../../common/types/user-role.enum";
@@ -33,6 +34,14 @@ import { UploadVehicleDocumentDto } from "./dto/upload-vehicle-document.dto";
 import type { VehicleDocumentDocument } from "./schemas/vehicle-document.schema";
 import { VehiclesService } from "./vehicles.service";
 import type { VehicleSummary } from "./vehicles.service";
+
+interface VehicleTypeOption {
+  code: string;
+  displayName: string;
+  icon: string;
+  seatCapacity: number;
+  isActive: boolean;
+}
 
 function toDocumentSummary(document: VehicleDocumentDocument) {
   return {
@@ -53,6 +62,7 @@ function toDocumentSummary(document: VehicleDocumentDocument) {
 export class VehiclesController {
   constructor(
     private readonly vehicles: VehiclesService,
+    private readonly rideTypes: RideTypesService,
     private readonly storage: StorageService,
   ) {}
 
@@ -64,6 +74,24 @@ export class VehiclesController {
   ): Promise<ApiSuccessBody<VehicleSummary>> {
     const vehicle = await this.vehicles.create(user.userId, dto);
     return ok(this.vehicles.toSummary(vehicle));
+  }
+
+  @Get("types")
+  @ApiOperation({
+    summary:
+      "Vehicle types a driver can register: the admin-managed ride types (a ride type is a vehicle type)",
+  })
+  async types(): Promise<ApiSuccessBody<VehicleTypeOption[]>> {
+    const rideTypes = await this.rideTypes.listVehicleTypes();
+    return ok(
+      rideTypes.map((rideType) => ({
+        code: rideType.vehicleType,
+        displayName: rideType.displayName,
+        icon: rideType.icon,
+        seatCapacity: rideType.seatCapacity,
+        isActive: rideType.isActive,
+      })),
+    );
   }
 
   @Get("my")

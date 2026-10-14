@@ -16,7 +16,8 @@ import {
 } from "class-validator";
 import { DriverDocumentType } from "../../drivers/schemas/driver-document.schema";
 import { VehicleDocumentType } from "../../vehicles/schemas/vehicle-document.schema";
-import { VehicleType } from "../../vehicles/schemas/vehicle.schema";
+import { RIDE_TYPE_CODE_PATTERN } from "../../ride-types/schemas/ride-type.schema";
+import type { VehicleType } from "../../vehicles/schemas/vehicle.schema";
 import { DriverChangeStatus } from "../schemas/driver-change-request.schema";
 
 const trim = ({ value }: { value: unknown }) =>
@@ -55,9 +56,18 @@ export class VehicleChangeDto {
   @IsMongoId()
   vehicleId!: string;
 
-  @ApiPropertyOptional({ enum: VehicleType })
+  @ApiPropertyOptional({
+    example: "CAB",
+    description: "Code of a ride type (GET /vehicles/types)",
+  })
   @IsOptional()
-  @IsEnum(VehicleType)
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === "string" ? value.trim().toUpperCase() : value,
+  )
+  @IsString()
+  @Matches(RIDE_TYPE_CODE_PATTERN, {
+    message: "vehicleType is not a valid vehicle type code",
+  })
   vehicleType?: VehicleType;
 
   @ApiPropertyOptional({ example: "UP32AB1234" })

@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { MongooseModule } from "@nestjs/mongoose";
 import { DriversModule } from "../drivers/drivers.module";
+import { RideTypesModule } from "../ride-types/ride-types.module";
 import {
   VehicleDocument,
   VehicleDocumentSchema,
@@ -16,6 +17,7 @@ import { VehiclesService } from "./vehicles.service";
       { name: VehicleDocument.name, schema: VehicleDocumentSchema },
     ]),
     DriversModule,
+    RideTypesModule,
   ],
   controllers: [VehiclesController],
   providers: [VehiclesService],

@@ -1,12 +1,11 @@
 import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose";
 import type { HydratedDocument } from "mongoose";
-import { VehicleType } from "../../vehicles/schemas/vehicle.schema";
+import type { VehicleType } from "../../vehicles/schemas/vehicle.schema";
 
 /**
  * The V1 products seeded on first boot (locked blueprint: BIKE, AUTO,
  * E_RICKSHAW, CAB). Since Phase 7 a ride type's code is data, not an enum:
- * admins can create further products (e.g. "CAB_XL" served by CAB drivers)
- * without a deploy. These constants remain for seeds, tests and defaults.
+ * admins can create further products (e.g. "BUS") without a deploy. These constants remain for seeds, tests and defaults.
  */
 export enum RideTypeCode {
   BIKE = "BIKE",
@@ -18,10 +17,14 @@ export enum RideTypeCode {
 /** Upper-case letters, digits and underscores, starting with a letter. */
 export const RIDE_TYPE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{1,23}$/;
 
+/** Largest seat count an admin can give a ride type (a bus needs more than a cab). */
+export const MAX_SEAT_CAPACITY = 60;
+
 /**
- * Products are deliberately separate from VehicleType: each ride type maps
- * onto exactly one vehicle type (what matching filters on), and several
- * products may share one (Cab and Cab XL).
+ * A ride type IS a vehicle type: its code is the code drivers register their
+ * vehicle under and what matching filters on, so `vehicleType` always equals
+ * `code`. Creating a ride type (e.g. "BUS") therefore creates the vehicle type
+ * too, and only drivers with a vehicle of that type serve it.
  *
  * Never deleted: historical rides reference the code, so a retired product
  * is switched off (isActive=false) and stays readable.
@@ -41,11 +44,11 @@ export class RideType {
   @Prop({ required: true, trim: true })
   icon!: string;
 
-  /** Which drivers can serve this ride type. */
-  @Prop({ required: true, enum: VehicleType })
+  /** Vehicle type drivers must have to serve this ride type; always equal to `code`. */
+  @Prop({ required: true, uppercase: true, trim: true })
   vehicleType!: VehicleType;
 
-  @Prop({ required: true, min: 1, max: 8 })
+  @Prop({ required: true, min: 1, max: MAX_SEAT_CAPACITY })
   seatCapacity!: number;
 
   @Prop({ required: true, default: 0 })

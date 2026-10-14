@@ -7,7 +7,6 @@ import {
   apiConflict,
   apiNotFound,
 } from "../../common/exceptions/api.exception";
-import type { VehicleType } from "../vehicles/schemas/vehicle.schema";
 import type {
   CreateRideTypeDto,
   UpdateRideTypeDto,
@@ -22,7 +21,8 @@ export interface RideTypeSummary {
   displayName: string;
   description?: string;
   icon: string;
-  vehicleType: VehicleType;
+  /** Always equal to `code`: a ride type is a vehicle type. */
+  vehicleType: string;
   seatCapacity: number;
   sortOrder: number;
   isActive: boolean;
@@ -42,6 +42,24 @@ export class RideTypesService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     await this.seedDefaults();
+    await this.warnAboutLegacyVehicleTypes();
+  }
+
+  /**
+   * A ride type used to be able to point at another ride type's vehicle type
+   * (e.g. CAB_XL served by CAB). Now they are one and the same; rows created
+   * the old way keep working but are flagged so an admin can retire them.
+   */
+  private async warnAboutLegacyVehicleTypes(): Promise<void> {
+    const legacy = await this.rideTypeModel
+      .find({ $expr: { $ne: ["$vehicleType", "$code"] } })
+      .select("code vehicleType")
+      .lean()
+      .exec();
+    for (const row of legacy)
+      this.logger.warn(
+        `Ride type ${row.code} is served by vehicle type ${row.vehicleType}; new ride types always use their own code`,
+      );
   }
 
   /** Idempotent and safe to run concurrently from several instances. */
@@ -90,6 +108,23 @@ export class RideTypesService implements OnModuleInit {
     return this.rideTypeModel.find().sort({ sortOrder: 1 }).exec();
   }
 
+  /**
+   * Vehicle types drivers can register: every ride type's code, switched on
+   * or not (an e-rickshaw driver can register before the product launches).
+   */
+  async listVehicleTypes(): Promise<RideTypeDocument[]> {
+    return this.listAll();
+  }
+
+  /** A vehicle type is valid when a ride type with that code exists. */
+  async assertVehicleType(code: string): Promise<void> {
+    if (!(await this.rideTypeModel.exists({ code })))
+      throw apiBadRequest(
+        `${code} is not a vehicle type Tirvona serves`,
+        "VEHICLE_TYPE_INVALID",
+      );
+  }
+
   async findByCode(code: string): Promise<RideTypeDocument | null> {
     return this.rideTypeModel.findOne({ code }).exec();
   }
@@ -121,7 +156,7 @@ export class RideTypesService implements OnModuleInit {
         displayName: dto.displayName,
         description: dto.description,
         icon: dto.icon,
-        vehicleType: dto.vehicleType,
+        vehicleType: dto.code,
         seatCapacity: dto.seatCapacity,
         sortOrder: dto.sortOrder ?? 50,
         isActive: dto.isActive ?? false,
@@ -149,7 +184,6 @@ export class RideTypesService implements OnModuleInit {
     if (dto.displayName !== undefined) rideType.displayName = dto.displayName;
     if (dto.description !== undefined) rideType.description = dto.description;
     if (dto.icon !== undefined) rideType.icon = dto.icon;
-    if (dto.vehicleType !== undefined) rideType.vehicleType = dto.vehicleType;
     if (dto.seatCapacity !== undefined)
       rideType.seatCapacity = dto.seatCapacity;
     if (dto.isActive !== undefined) rideType.isActive = dto.isActive;

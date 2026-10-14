@@ -128,7 +128,9 @@ export class DriverChangesController {
     @CurrentUser() user: AuthenticatedUser,
     @Param("id", ParseObjectIdPipe) id: string,
   ): Promise<StreamableFile> {
-    return this.storage.stream(await this.changes.fileForDriver(user.userId, id));
+    return this.storage.stream(
+      await this.changes.fileForDriver(user.userId, id),
+    );
   }
 
   @Delete(":id")

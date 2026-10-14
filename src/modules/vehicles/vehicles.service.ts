@@ -8,6 +8,7 @@ import {
 import { StorageService } from "../storage/storage.service";
 import { DocumentStatus } from "../../common/types/document-status.enum";
 import { DriversService } from "../drivers/drivers.service";
+import { RideTypesService } from "../ride-types/ride-types.service";
 import { CreateVehicleDto } from "./dto/create-vehicle.dto";
 import { UpdateVehicleDto } from "./dto/update-vehicle.dto";
 import { UploadVehicleDocumentDto } from "./dto/upload-vehicle-document.dto";
@@ -42,6 +43,7 @@ export class VehiclesService {
     @InjectModel(VehicleDocumentModel.name)
     private readonly documentModel: Model<VehicleDocumentModel>,
     private readonly drivers: DriversService,
+    private readonly rideTypes: RideTypesService,
     private readonly storage: StorageService,
   ) {}
 
@@ -65,6 +67,7 @@ export class VehiclesService {
   ): Promise<VehicleDocument> {
     const driver = await this.drivers.getByUserId(userId);
     this.drivers.assertEditable(driver);
+    await this.rideTypes.assertVehicleType(dto.vehicleType);
 
     const registrationNumber = dto.registrationNumber.toUpperCase();
     if (await this.vehicleModel.exists({ registrationNumber }))
@@ -170,7 +173,10 @@ export class VehiclesService {
         );
       vehicle.registrationNumber = registrationNumber;
     }
-    if (dto.vehicleType !== undefined) vehicle.vehicleType = dto.vehicleType;
+    if (dto.vehicleType !== undefined) {
+      await this.rideTypes.assertVehicleType(dto.vehicleType);
+      vehicle.vehicleType = dto.vehicleType;
+    }
     if (dto.make !== undefined) vehicle.make = dto.make;
     if (dto.model !== undefined) vehicle.vehicleModel = dto.model;
     if (dto.color !== undefined) vehicle.color = dto.color;
@@ -194,7 +200,10 @@ export class VehiclesService {
   ): Promise<VehicleDocumentDocument> {
     const vehicle = await this.findOwnedForEdit(userId, vehicleId);
 
-    const filePath = await this.storage.put(file, { segment: "vehicles", ownerId: vehicle._id.toString() });
+    const filePath = await this.storage.put(file, {
+      segment: "vehicles",
+      ownerId: vehicle._id.toString(),
+    });
     try {
       const existing = await this.documentModel
         .findOne({ vehicleId: vehicle._id, documentType: dto.documentType })

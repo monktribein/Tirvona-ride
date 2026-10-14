@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { Transform } from "class-transformer";
 import {
-  IsEnum,
+  Matches,
   IsInt,
   IsOptional,
   IsString,
@@ -8,11 +9,21 @@ import {
   Max,
   Min,
 } from "class-validator";
-import { VehicleType } from "../schemas/vehicle.schema";
+import { RIDE_TYPE_CODE_PATTERN } from "../../ride-types/schemas/ride-type.schema";
+import type { VehicleType } from "../schemas/vehicle.schema";
 
 export class CreateVehicleDto {
-  @ApiProperty({ enum: VehicleType })
-  @IsEnum(VehicleType)
+  @ApiProperty({
+    example: "CAB",
+    description: "Code of a ride type (GET /vehicles/types)",
+  })
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === "string" ? value.trim().toUpperCase() : value,
+  )
+  @IsString()
+  @Matches(RIDE_TYPE_CODE_PATTERN, {
+    message: "vehicleType is not a valid vehicle type code",
+  })
   vehicleType!: VehicleType;
 
   @ApiProperty({ example: "UP32AB1234" })
