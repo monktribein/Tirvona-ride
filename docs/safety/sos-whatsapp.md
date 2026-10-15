@@ -62,7 +62,7 @@ Samples: `{{1}}` Asha Verma · `{{2}}` SOS-RZ4H2Y.
 Without this one the contacts get only the first alert (the live link still updates by itself).
 
 ### 3. The link host must be public
-The **Track live** button URL must be the API's public address, and it must match `SHARE_RIDE_LINK_BASE_URL` (default: `<PUBLIC_BASE_URL>/api/v1/shared-rides/view`). Set `PUBLIC_BASE_URL` to your real HTTPS address (for example `https://tirvona-ride.onrender.com`). A `localhost` link is useless to a contact. Meta rejects the send if the button URL does not start with the prefix registered in the template.
+The **Track live** button URL must be the API's public address, and it must match `SHARE_RIDE_LINK_BASE_URL` (default: `<PUBLIC_BASE_URL>/api/v1/shared-rides/view`). Set `PUBLIC_BASE_URL` to your real HTTPS address (for example `https://apiride.tirvona.com`). A `localhost` link is useless to a contact. Meta rejects the send if the button URL does not start with the prefix registered in the template.
 
 ### 4. Environment (API)
 ```

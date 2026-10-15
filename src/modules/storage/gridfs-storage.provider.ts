@@ -14,7 +14,7 @@ const CHUNK_SIZE_BYTES = 255 * 1024;
 /**
  * Files in MongoDB GridFS (`<bucket>.files` / `<bucket>.chunks`) on the same
  * Atlas cluster as everything else, so nothing depends on the web server's
- * disk (Render's filesystem is wiped on every deploy) and backups, access
+ * disk (a PaaS filesystem is wiped on every deploy) and backups, access
  * control and restores stay in one place.
  *
  * Uses the driver bundled with Mongoose (`mongoose.mongo`) so its types always

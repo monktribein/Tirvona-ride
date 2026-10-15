@@ -2,7 +2,7 @@
 
 KYC documents (driver and vehicle) and profile photos are stored in **MongoDB
 GridFS** on the same Atlas cluster as the rest of the data. Nothing is written
-to the web server's disk, so a Render redeploy loses nothing. Cloudinary is
+to the web server's disk, so a redeploy of the server loses nothing. Cloudinary is
 **not** configured; the design below is what makes adding it later a one-class
 change.
 
