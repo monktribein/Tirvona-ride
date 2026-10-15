@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { Type } from "class-transformer";
 import {
   IsBoolean,
+  IsEnum,
   IsInt,
   IsNumber,
   IsOptional,
@@ -12,6 +13,10 @@ import {
   Min,
   ValidateNested,
 } from "class-validator";
+import {
+  PricingMode,
+  WAITING_LIMITS,
+} from "../../pricing/upfront-fare";
 import { InitialDistanceDto } from "../../ride-config/dto/ride-config.dto";
 import {
   MAX_SEAT_CAPACITY,
@@ -61,11 +66,58 @@ export class UpdateRideTypeDto {
   seatCapacity?: number;
 
   @ApiPropertyOptional({
+    description:
+      "Drivers of this vehicle type must provide a driving licence for KYC",
+  })
+  @IsOptional()
+  @IsBoolean()
+  licenseRequired?: boolean;
+
+  @ApiPropertyOptional({
     description: "Customers can book it (requires a tariff)",
   })
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+@ApiPropertyOptional({
+    enum: PricingMode,
+    description:
+      "UPFRONT: the fare quoted at booking is the fare. METERED: recalculated from the actual trip",
+  })
+  @IsOptional()
+  @IsEnum(PricingMode)
+  pricingMode?: PricingMode;
+
+  @ApiPropertyOptional({
+    example: 3,
+    description: "Free wait at the pickup, minutes (UPFRONT rides)",
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(WAITING_LIMITS.freeMinutes.min)
+  @Max(WAITING_LIMITS.freeMinutes.max)
+  waitFreeMinutes?: number;
+
+  @ApiPropertyOptional({
+    example: 2,
+    description: "Rupees per chargeable waiting minute; 0 = waiting is free",
+  })
+  @IsOptional()
+  @IsNumber(MONEY)
+  @Min(WAITING_LIMITS.perMinuteRate.min)
+  @Max(WAITING_LIMITS.perMinuteRate.max)
+  waitPerMinuteRate?: number;
+
+  @ApiPropertyOptional({
+    example: 15,
+    description: "Most waiting minutes that can be charged",
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(WAITING_LIMITS.maxChargeMinutes.min)
+  @Max(WAITING_LIMITS.maxChargeMinutes.max)
+  waitMaxChargeMinutes?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -143,6 +195,54 @@ export class CreateRideTypeDto {
   @Min(1)
   @Max(MAX_SEAT_CAPACITY)
   seatCapacity!: number;
+
+  @ApiPropertyOptional({
+    default: true,
+    description:
+      "Drivers of this vehicle type must provide a driving licence for KYC",
+  })
+  @IsOptional()
+  @IsBoolean()
+  licenseRequired?: boolean;
+
+@ApiPropertyOptional({
+    enum: PricingMode,
+    description:
+      "UPFRONT: the fare quoted at booking is the fare. METERED: recalculated from the actual trip",
+  })
+  @IsOptional()
+  @IsEnum(PricingMode)
+  pricingMode?: PricingMode;
+
+  @ApiPropertyOptional({
+    example: 3,
+    description: "Free wait at the pickup, minutes (UPFRONT rides)",
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(WAITING_LIMITS.freeMinutes.min)
+  @Max(WAITING_LIMITS.freeMinutes.max)
+  waitFreeMinutes?: number;
+
+  @ApiPropertyOptional({
+    example: 2,
+    description: "Rupees per chargeable waiting minute; 0 = waiting is free",
+  })
+  @IsOptional()
+  @IsNumber(MONEY)
+  @Min(WAITING_LIMITS.perMinuteRate.min)
+  @Max(WAITING_LIMITS.perMinuteRate.max)
+  waitPerMinuteRate?: number;
+
+  @ApiPropertyOptional({
+    example: 15,
+    description: "Most waiting minutes that can be charged",
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(WAITING_LIMITS.maxChargeMinutes.min)
+  @Max(WAITING_LIMITS.maxChargeMinutes.max)
+  waitMaxChargeMinutes?: number;
 
   @ApiPropertyOptional({ default: 50 })
   @IsOptional()

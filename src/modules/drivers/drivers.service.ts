@@ -8,6 +8,7 @@ import {
   apiConflict,
   apiNotFound,
 } from "../../common/exceptions/api.exception";
+import { RideTypesService } from "../ride-types/ride-types.service";
 import { StorageService } from "../storage/storage.service";
 import { DocumentStatus } from "../../common/types/document-status.enum";
 import { Vehicle } from "../vehicles/schemas/vehicle.schema";
@@ -47,8 +48,11 @@ export interface DriverSummary {
 
 // Documents a driver must have on file (any status) before KYC can be
 // submitted for admin review. Business rule, not part of the schema itself.
-const REQUIRED_DOCUMENT_TYPES: DriverDocumentType[] = [
-  DriverDocumentType.DRIVING_LICENSE,
+// The driving licence drops out for vehicle types that do not require one.
+const requiredDocumentTypes = (
+  licenseRequired: boolean,
+): DriverDocumentType[] => [
+  ...(licenseRequired ? [DriverDocumentType.DRIVING_LICENSE] : []),
   DriverDocumentType.AADHAAR,
   DriverDocumentType.PROFILE_PHOTO,
 ];
@@ -77,6 +81,7 @@ export class DriversService {
     @InjectModel(Vehicle.name)
     private readonly vehicleModel: Model<Vehicle>,
     private readonly storage: StorageService,
+    private readonly rideTypes: RideTypesService,
   ) {}
 
   toSummary(driver: DriverProfileDocument): DriverSummary {
@@ -173,7 +178,10 @@ export class DriversService {
     const driver = await this.getByUserId(userId);
     this.assertEditable(driver);
 
-    const filePath = await this.storage.put(file, { segment: "drivers", ownerId: driver._id.toString() });
+    const filePath = await this.storage.put(file, {
+      segment: "drivers",
+      ownerId: driver._id.toString(),
+    });
     try {
       // Resubmitting a document type replaces the previous file+record
       // rather than accumulating duplicates.
@@ -267,26 +275,32 @@ export class DriversService {
         "INVALID_DRIVER_STATUS",
       );
 
-    const [documents, hasVehicle] = await Promise.all([
+    const [documents, vehicle] = await Promise.all([
       this.documentModel.find({ driverId: driver._id }).exec(),
-      this.vehicleModel.exists({ driverId: driver._id, isActive: true }),
+      this.vehicleModel
+        .findOne({ driverId: driver._id, isActive: true })
+        .select("vehicleType")
+        .lean()
+        .exec(),
     ]);
+    const hasVehicle = Boolean(vehicle);
+    // The licence is optional for vehicle types an admin has switched it off for.
+    const licenseRequired = await this.rideTypes.isLicenseRequired(
+      vehicle?.vehicleType,
+    );
     const uploadedTypes = new Set(documents.map((doc) => doc.documentType));
-    const missing = REQUIRED_DOCUMENT_TYPES.filter(
+    const missing = requiredDocumentTypes(licenseRequired).filter(
       (type) => !uploadedTypes.has(type),
     );
-    if (
-      !driver.licenseNumber ||
-      !driver.licenseExpiry ||
-      missing.length > 0 ||
-      !hasVehicle
-    )
+    const missingLicense =
+      licenseRequired && (!driver.licenseNumber || !driver.licenseExpiry);
+    if (missingLicense || missing.length > 0 || !hasVehicle)
       throw apiBadRequest(
         "Complete your license details, vehicle and required documents before submitting",
         "DRIVER_KYC_INCOMPLETE",
         {
           missingDocuments: missing,
-          missingLicense: !driver.licenseNumber || !driver.licenseExpiry,
+          missingLicense,
           missingVehicle: !hasVehicle,
         },
       );
@@ -295,6 +309,19 @@ export class DriversService {
     driver.rejectionReason = undefined;
     await driver.save();
     return driver;
+  }
+
+  /**
+   * Whether this driver must provide a driving licence: decided by the vehicle
+   * type of their active vehicle, and required until they have one.
+   */
+  async licenseRequiredFor(driver: DriverProfileDocument): Promise<boolean> {
+    const vehicle = await this.vehicleModel
+      .findOne({ driverId: driver._id, isActive: true })
+      .select("vehicleType")
+      .lean()
+      .exec();
+    return this.rideTypes.isLicenseRequired(vehicle?.vehicleType);
   }
 
   async listForAdmin(status?: DriverStatus): Promise<DriverProfileDocument[]> {

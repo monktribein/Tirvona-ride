@@ -21,6 +21,7 @@ import {
 } from "../ride-config/ride-config.limits";
 import { RideDistanceConfigService } from "../ride-config/ride-distance-config.service";
 import type { RideDistanceConfigView } from "../ride-config/ride-distance-config.service";
+import { FARE_SETTING_LIMITS } from "../pricing/upfront-fare";
 import { RideTypesService } from "../ride-types/ride-types.service";
 import type { RideTypeSummary } from "../ride-types/ride-types.service";
 import { ParseRideTypeCodePipe } from "./admin-pricing.controller";
@@ -39,7 +40,7 @@ export interface RideDistanceConfigList {
 }
 
 export interface PlatformSettingsResponse {
-  limits: typeof RADIUS_LIMITS;
+  limits: typeof RADIUS_LIMITS & typeof FARE_SETTING_LIMITS;
   settings: PlatformSettingsView | null;
 }
 
@@ -139,7 +140,8 @@ export class AdminRideConfigController {
 
   @Get("platform-settings")
   @ApiOperation({
-    summary: "Matching radius and nearby-drivers radius (global)",
+    summary:
+      "Matching radius, nearby-drivers radius and upfront-fare settings (global)",
   })
   async getSettings(): Promise<ApiSuccessBody<PlatformSettingsResponse>> {
     return ok(await this.settingsResponse());
@@ -148,7 +150,7 @@ export class AdminRideConfigController {
   @Patch("platform-settings")
   @ApiOperation({
     summary:
-      "Change the matching radius and/or the nearby-drivers radius (km). Live on the next search; no restart.",
+      "Change the matching radius, nearby-drivers radius (km) and/or the upfront-fare settings (quote validity, ETA buffer, early-drop threshold). Live on the next request; no restart.",
   })
   async updateSettings(
     @Body() dto: UpdatePlatformSettingsDto,
@@ -156,7 +158,7 @@ export class AdminRideConfigController {
   ): Promise<ApiSuccessBody<PlatformSettingsResponse>> {
     if (!hasChanges(dto))
       throw apiBadRequest(
-        "Provide a matching radius and/or a nearby drivers radius",
+        "Provide at least one platform setting to change",
         "VALIDATION_FAILED",
       );
     const { before, after } = await this.platform.update(dto, admin.userId);
@@ -168,16 +170,8 @@ export class AdminRideConfigController {
       targetLabel: "Ride & matching configuration",
       metadata: {
         version: after.version,
-        before: before
-          ? {
-              matchingRadiusKm: before.matchingRadiusKm,
-              nearbyDriversRadiusKm: before.nearbyDriversRadiusKm,
-            }
-          : null,
-        after: {
-          matchingRadiusKm: after.matchingRadiusKm,
-          nearbyDriversRadiusKm: after.nearbyDriversRadiusKm,
-        },
+        before: before ? this.platform.toView(before) : null,
+        after: this.platform.toView(after),
       },
     });
     return ok(await this.settingsResponse());
@@ -196,7 +190,7 @@ export class AdminRideConfigController {
   private async settingsResponse(): Promise<PlatformSettingsResponse> {
     const settings = await this.platform.find();
     return {
-      limits: RADIUS_LIMITS,
+      limits: { ...RADIUS_LIMITS, ...FARE_SETTING_LIMITS },
       settings: settings ? this.platform.toView(settings) : null,
     };
   }

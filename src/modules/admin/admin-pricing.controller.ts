@@ -218,6 +218,7 @@ export class AdminPricingController {
         "RIDE_TYPE_DISTANCE_REQUIRED",
       );
 
+    const beforeSummary = this.rideTypes.toSummary(before);
     const { reason, ...changes } = dto;
     const updated = await this.rideTypes.update(code, changes);
     const toggled =
@@ -233,7 +234,22 @@ export class AdminPricingController {
       targetId: code,
       targetLabel: updated.displayName,
       reason,
-      metadata: { changes: { ...changes } },
+      metadata: {
+        changes: { ...changes },
+        // The charging rules before this edit, so a fare dispute can be traced to a change.
+        before: Object.fromEntries(
+          (
+            [
+              "pricingMode",
+              "waitFreeMinutes",
+              "waitPerMinuteRate",
+              "waitMaxChargeMinutes",
+            ] as const
+          )
+            .filter((key) => changes[key] !== undefined)
+            .map((key) => [key, beforeSummary[key]]),
+        ),
+      },
     });
     return ok(this.rideTypes.toSummary(updated));
   }

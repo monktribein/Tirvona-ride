@@ -62,9 +62,13 @@ export class DriversController {
   @ApiOperation({ summary: "Get the authenticated driver's profile" })
   async me(
     @CurrentUser() user: AuthenticatedUser,
-  ): Promise<ApiSuccessBody<DriverSummary>> {
+  ): Promise<ApiSuccessBody<DriverSummary & { licenseRequired: boolean }>> {
     const driver = await this.drivers.getByUserId(user.userId);
-    return ok(this.drivers.toSummary(driver));
+    return ok({
+      ...this.drivers.toSummary(driver),
+      // Decided by the active vehicle's type; the app marks the licence optional.
+      licenseRequired: await this.drivers.licenseRequiredFor(driver),
+    });
   }
 
   @Patch("me")

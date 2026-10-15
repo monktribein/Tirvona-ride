@@ -20,6 +20,7 @@ import { RideDispatchScheduler } from "./ride-dispatch.scheduler";
 import { RideDispatchService } from "./ride-dispatch.service";
 import { RideEventsService } from "./ride-events.service";
 import { RideLifecycleService } from "./ride-lifecycle.service";
+import { RideFareAdjustmentService } from "./ride-fare-adjustment.service";
 import { RidePaymentStateService } from "./ride-payment-state.service";
 import { RideRouteService } from "./ride-route.service";
 import { RiderHomeService } from "./rider-home.service";
@@ -78,6 +79,7 @@ import {
     DriverAvailabilityService,
     RidesAdminService,
     RidePaymentStateService,
+    RideFareAdjustmentService,
     RideRouteService,
     RiderHomeService,
   ],
@@ -88,6 +90,7 @@ import {
     RideEventsService,
     RideLifecycleService,
     RidePaymentStateService,
+    RideFareAdjustmentService,
     RideTransitionService,
     RideViewService,
   ],

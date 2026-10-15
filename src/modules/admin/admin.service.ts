@@ -61,6 +61,8 @@ export interface DriverListItem {
 
 export interface DriverDetail {
   driver: DriverSummary;
+  /** False when the driver's vehicle type does not need a driving licence. */
+  licenseRequired: boolean;
   user: UserSummary;
   // No filePath: server paths stay server-side. The panel fetches file bytes
   // through the /admin/.../file endpoints by document id.
@@ -200,6 +202,7 @@ export class AdminService {
 
     return {
       driver: this.drivers.toSummary(driver),
+      licenseRequired: await this.drivers.licenseRequiredFor(driver),
       user: this.users.toSummary(user),
       documents: documents.map((document) => ({
         id: document._id.toString(),

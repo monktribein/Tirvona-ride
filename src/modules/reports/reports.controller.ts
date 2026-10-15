@@ -4,12 +4,13 @@ import { Roles } from "../../common/decorators/roles.decorator";
 import { ok } from "../../common/http/api-response";
 import type { ApiSuccessBody } from "../../common/http/api-response";
 import { UserRole } from "../../common/types/user-role.enum";
-import { ReportQueryDto } from "./dto/report-query.dto";
+import { FareQuotesQueryDto, ReportQueryDto } from "./dto/report-query.dto";
 import { ReportsService } from "./reports.service";
 import type {
   CancellationsReport,
   CustomersReport,
   DriversReport,
+  FareQuotesReport,
   OverviewReport,
   PromotionsReport,
   RevenueReport,
@@ -99,5 +100,18 @@ export class ReportsController {
     @Query() query: ReportQueryDto,
   ): Promise<ApiSuccessBody<PromotionsReport>> {
     return ok(await this.reports.promotions(this.reports.range(query)));
+  }
+
+  @Get("fare-quotes")
+  @ApiOperation({
+    summary:
+      "Upfront quote versus the trip actually made, per ride type and route: what the meter would have charged, what Tirvona absorbed, early drops and waiting charges",
+  })
+  async fareQuotes(
+    @Query() query: FareQuotesQueryDto,
+  ): Promise<ApiSuccessBody<FareQuotesReport>> {
+    return ok(
+      await this.reports.fareQuotes(this.reports.range(query), query.rideType),
+    );
   }
 }

@@ -730,6 +730,7 @@ describe("Phase 7 — admin completion & hardening (e2e)", () => {
           displayName: "Auto Share",
           icon: "auto",
           seatCapacity: 3,
+          licenseRequired: false,
           isActive: true,
           pricing: {
             baseFare: 20,
@@ -744,6 +745,7 @@ describe("Phase 7 — admin completion & hardening (e2e)", () => {
         rideType: {
           code: "AUTO_SHARE",
           vehicleType: "AUTO_SHARE",
+          licenseRequired: false,
           isActive: true,
         },
         pricing: { version: 1 },
@@ -756,6 +758,11 @@ describe("Phase 7 — admin completion & hardening (e2e)", () => {
       expect(vehicleTypes.map((type: { code: string }) => type.code)).toContain(
         "AUTO_SHARE",
       );
+      expect(
+        vehicleTypes.find(
+          (type: { code: string }) => type.code === "AUTO_SHARE",
+        ),
+      ).toMatchObject({ licenseRequired: false });
       await api()
         .post("/api/v1/admin/ride-types")
         .set(as("admin"))

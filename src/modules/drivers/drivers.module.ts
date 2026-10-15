@@ -9,6 +9,7 @@ import {
   DriverProfileSchema,
 } from "./schemas/driver-profile.schema";
 import { Vehicle, VehicleSchema } from "../vehicles/schemas/vehicle.schema";
+import { RideTypesModule } from "../ride-types/ride-types.module";
 import { DriversController } from "./drivers.controller";
 import { DriversService } from "./drivers.service";
 
@@ -22,6 +23,7 @@ import { DriversService } from "./drivers.service";
       // VehiclesModule to avoid a circular module dependency.
       { name: Vehicle.name, schema: VehicleSchema },
     ]),
+    RideTypesModule,
   ],
   controllers: [DriversController],
   providers: [DriversService],

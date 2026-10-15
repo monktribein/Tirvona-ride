@@ -40,6 +40,7 @@ interface VehicleTypeOption {
   displayName: string;
   icon: string;
   seatCapacity: number;
+  licenseRequired: boolean;
   isActive: boolean;
 }
 
@@ -89,6 +90,7 @@ export class VehiclesController {
         displayName: rideType.displayName,
         icon: rideType.icon,
         seatCapacity: rideType.seatCapacity,
+        licenseRequired: rideType.licenseRequired !== false,
         isActive: rideType.isActive,
       })),
     );

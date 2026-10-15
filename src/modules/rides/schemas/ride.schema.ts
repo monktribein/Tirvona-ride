@@ -5,6 +5,7 @@ import type { VehicleType } from "../../vehicles/schemas/vehicle.schema";
 import { RideCompletionMode } from "../ride-completion";
 import { RidePaymentStatus } from "../ride-payment-status";
 import { RideActorType, RideStatus } from "../ride-state-machine";
+import { PricingMode } from "../../pricing/upfront-fare";
 import { PromoDiscountType } from "../../promotions/promo-rules";
 import { RideKind } from "../../circuit-rides/circuit-ride.types";
 import {
@@ -119,6 +120,36 @@ export class RideFinalFare {
 
   @Prop({ required: true })
   computedAt!: Date;
+
+  // ── Upfront rides only (absent on metered rides and on rides completed before upfront fares) ──
+
+  /** The locked quote this bill started from. */
+  @Prop({ min: 0 })
+  quotedFare?: number;
+
+  /** Waiting charge added to the fare, rupees. */
+  @Prop({ min: 0 })
+  waitingCharge?: number;
+
+  /** Time the driver waited at the pickup, seconds. */
+  @Prop({ min: 0 })
+  waitingSeconds?: number;
+
+  /** Waiting minutes billed (past the free time, rounded up, capped). */
+  @Prop({ min: 0 })
+  waitingChargeableMinutes?: number;
+
+  /** The trip ended well short of the drop-off (below the early-drop threshold) and was priced on the distance travelled. */
+  @Prop()
+  earlyDrop?: boolean;
+
+  /** What the actual trip costs at the metered tariff — reporting: quote versus reality. */
+  @Prop({ min: 0 })
+  meteredEquivalent?: number;
+
+  /** Sum of admin adjustments applied after completion (signed, rupees). */
+  @Prop()
+  adjustmentsTotal?: number;
 }
 const RideFinalFareSchema = SchemaFactory.createForClass(RideFinalFare);
 
@@ -145,6 +176,57 @@ export class RidePeakFare {
   surcharge!: number;
 }
 const RidePeakFareSchema = SchemaFactory.createForClass(RidePeakFare);
+
+/** Waiting terms frozen on an upfront ride at booking; later admin edits never touch it. */
+@Schema({ _id: false })
+export class RideWaitingTerms {
+  @Prop({ required: true, min: 0 })
+  freeMinutes!: number;
+
+  @Prop({ required: true, min: 0 })
+  perMinuteRate!: number;
+
+  @Prop({ required: true, min: 0 })
+  maxChargeMinutes!: number;
+}
+const RideWaitingTermsSchema = SchemaFactory.createForClass(RideWaitingTerms);
+
+export enum FareAdjustmentType {
+  /** Lowers what the customer owes (goodwill, dispute). */
+  CREDIT = "CREDIT",
+  /** Raises it (a toll, a correction); needs the customer's consent. */
+  CHARGE = "CHARGE",
+}
+
+/** A manual change to the fare of a completed, not yet paid ride. Append-only. */
+@Schema({ _id: false })
+export class RideFareAdjustment {
+  @Prop({ required: true, enum: FareAdjustmentType })
+  type!: FareAdjustmentType;
+
+  /** Signed rupees: negative for a CREDIT, positive for a CHARGE. */
+  @Prop({ required: true })
+  amount!: number;
+
+  @Prop({ required: true, trim: true })
+  reason!: string;
+
+  /** ADMIN today; the field keeps room for support tooling. */
+  @Prop({ required: true })
+  source!: string;
+
+  @Prop({ required: true })
+  at!: Date;
+
+  @Prop({ type: SchemaTypes.ObjectId, ref: "User" })
+  by?: Types.ObjectId;
+
+  /** Whether the customer agreed to a CHARGE. */
+  @Prop()
+  customerConsent?: boolean;
+}
+const RideFareAdjustmentSchema =
+  SchemaFactory.createForClass(RideFareAdjustment);
 
 /**
  * The tariff and breakdown at booking time. Snapshotted so a later admin
@@ -212,6 +294,36 @@ export class RideFare {
   /** The final bill, frozen at completion (absent on rides completed before it existed). */
   @Prop({ type: RideFinalFareSchema })
   final?: RideFinalFare;
+
+  // ── Upfront fares: copied onto the ride at booking, so a ride finishes under the rules it was booked with ──
+
+  /** How this ride is charged. Absent on rides booked before upfront fares = METERED. */
+  @Prop({ enum: PricingMode })
+  pricingMode?: PricingMode;
+
+  /** UPFRONT: the locked amount the customer accepted (= estimatedFare). */
+  @Prop({ min: 0 })
+  quotedFare?: number;
+
+  /** When the quote was priced (server clock). */
+  @Prop()
+  quotedAt?: Date;
+
+  /** ETA buffer the quote was priced with, percent. */
+  @Prop({ min: 0 })
+  bufferPercent?: number;
+
+  /** Waiting terms of the ride type at booking. */
+  @Prop({ type: RideWaitingTermsSchema })
+  waiting?: RideWaitingTerms;
+
+  /** Early-drop threshold at booking, percent of the booked distance. */
+  @Prop({ min: 0 })
+  earlyDropThresholdPercent?: number;
+
+  /** Manual fare changes after completion (append-only). */
+  @Prop({ type: [RideFareAdjustmentSchema], default: undefined })
+  adjustments?: RideFareAdjustment[];
 }
 const RideFareSchema = SchemaFactory.createForClass(RideFare);
 

@@ -2,6 +2,9 @@ import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { InjectModel } from "@nestjs/mongoose";
 import type { Model, Types } from "mongoose";
+import { toPaise, toRupees } from "../../common/utils/money";
+import { splitFare } from "../earnings/commission";
+import { CommissionService } from "../earnings/commission.service";
 import { DriverProfile } from "../drivers/schemas/driver-profile.schema";
 import type { DriverProfileDocument } from "../drivers/schemas/driver-profile.schema";
 import { fromGeoJsonPoint } from "../locations/geo";
@@ -12,6 +15,7 @@ import type { UserDocument } from "../users/schemas/user.schema";
 import { circuitView } from "../circuit-rides/circuit-view";
 import type { CircuitView } from "../circuit-rides/circuit-view";
 import { RideKind } from "../circuit-rides/circuit-ride.types";
+import { DEFAULT_PRICING_MODE, PricingMode, waitingCharge } from "../pricing/upfront-fare";
 import { overrideAvailableAt } from "./ride-completion";
 import type { RideCompletionMode } from "./ride-completion";
 import { effectivePaymentStatus } from "./ride-payment-status";
@@ -20,6 +24,7 @@ import { DRIVER_ENGAGED_STATUSES, RideStatus } from "./ride-state-machine";
 import type { RideActorType } from "./ride-state-machine";
 import type {
   RideDocument,
+  RideFareAdjustment,
   RideFinalFare,
   RideLocation,
   RideVehicle,
@@ -48,6 +53,78 @@ export interface RideFareView {
   payableFare?: number;
   /** The frozen final bill: actual trip measured and each component (absent until completion). */
   final?: RideFinalFareView;
+  /** UPFRONT: `estimatedFare` is the locked quote and is what the ride costs (plus waiting, less an early drop). */
+  pricingMode: PricingMode;
+  /** UPFRONT: the locked amount; equals `estimatedFare`. */
+  quotedFare?: number;
+  quotedAt?: Date;
+  /** Manual fare changes made after completion, oldest first. */
+  adjustments?: RideFareAdjustmentView[];
+}
+
+export interface RideFareAdjustmentView {
+  type: string;
+  /** Signed rupees: negative lowers the fare. */
+  amount: number;
+  reason: string;
+  at: Date;
+}
+
+/**
+ * Waiting at the pickup on an upfront ride: the terms, how long the driver
+ * has waited and what that costs so far. While `running` the meter is live —
+ * apps count on from `waitedSeconds` against `serverTime`.
+ */
+export interface RideWaitingView {
+  freeMinutes: number;
+  perMinuteRate: number;
+  maxChargeMinutes: number;
+  waitedSeconds: number;
+  chargeableMinutes: number;
+  /** Rupees charged so far (the final charge once the trip has started). */
+  currentCharge: number;
+  /** Past this instant waiting is charged; absent before the driver arrives. */
+  freeUntil?: Date;
+  /** The driver is at the pickup and the trip has not started: the meter is running. */
+  running: boolean;
+  /** The cap on chargeable minutes has been reached. */
+  capped: boolean;
+  serverTime: Date;
+}
+
+const adjustmentView = (
+  adjustment: RideFareAdjustment,
+): RideFareAdjustmentView => ({
+  type: adjustment.type,
+  amount: adjustment.amount,
+  reason: adjustment.reason,
+  at: adjustment.at,
+});
+
+/** Null for metered rides and rides booked before waiting terms were frozen on them. */
+export function waitingView(
+  ride: RideDocument,
+  now: Date = new Date(),
+): RideWaitingView | undefined {
+  const terms = ride.fare.waiting;
+  if (ride.fare.pricingMode !== PricingMode.UPFRONT || !terms) return undefined;
+  const running = ride.status === RideStatus.DRIVER_ARRIVED;
+  const until = ride.startedAt ?? (running ? now : undefined);
+  const result = waitingCharge(terms, ride.arrivedAt, until);
+  return {
+    freeMinutes: terms.freeMinutes,
+    perMinuteRate: terms.perMinuteRate,
+    maxChargeMinutes: terms.maxChargeMinutes,
+    waitedSeconds: result.waitedSeconds,
+    chargeableMinutes: result.chargeableMinutes,
+    currentCharge: ride.fare.final?.waitingCharge ?? result.charge,
+    freeUntil: ride.arrivedAt
+      ? new Date(ride.arrivedAt.getTime() + terms.freeMinutes * 60_000)
+      : undefined,
+    running,
+    capped: result.capped,
+    serverTime: now,
+  };
 }
 
 export interface RidePeakView {
@@ -73,6 +150,16 @@ export interface RideFinalFareView {
   discount: number;
   payable: number;
   pricingVersion: number;
+  /** Upfront rides: the locked quote the bill started from. */
+  quotedFare?: number;
+  /** Upfront rides: waiting charge added to the fare, rupees. */
+  waitingCharge?: number;
+  waitingSeconds?: number;
+  waitingChargeableMinutes?: number;
+  /** Upfront rides: ended short of the drop-off and priced on the distance travelled. */
+  earlyDrop?: boolean;
+  /** Signed total of manual adjustments applied after completion. */
+  adjustmentsTotal?: number;
 }
 
 export function finalFareView(
@@ -94,6 +181,12 @@ export function finalFareView(
     discount: final.discount,
     payable: final.payable,
     pricingVersion: final.pricingVersion,
+    quotedFare: final.quotedFare,
+    waitingCharge: final.waitingCharge,
+    waitingSeconds: final.waitingSeconds,
+    waitingChargeableMinutes: final.waitingChargeableMinutes,
+    earlyDrop: final.earlyDrop,
+    adjustmentsTotal: final.adjustmentsTotal,
   };
 }
 
@@ -127,6 +220,8 @@ export interface RideView {
   /** Pickup → destination road path (Google encoded polyline); absent for straight-line routes. */
   routePolyline?: string;
   fare: RideFareView;
+  /** Upfront rides: the waiting terms and meter (absent on metered rides). */
+  waiting?: RideWaitingView;
   requestedAt: Date;
   assignedAt?: Date;
   acceptedAt?: Date;
@@ -196,7 +291,20 @@ export interface DriverEndOtpView {
   overrideAvailableAt: Date;
 }
 
+/** What the driver takes home from this ride: the fare less Tirvona's commission (promo discounts are Tirvona-funded). */
+export interface DriverEarningView {
+  /** The trip fare the driver earns on: the locked/estimated fare, or the final fare once known. */
+  gross: number;
+  commissionPercent: number;
+  commission: number;
+  net: number;
+  /** The final fare is known (the ride is completed); otherwise this is the fare quoted at booking. */
+  final: boolean;
+}
+
 export interface DriverRideView extends RideView {
+  /** What the driver earns on this ride (absent when no commission rate is configured). */
+  earning?: DriverEarningView;
   customer: { name: string; phone?: string };
   /** Present while the driver has asked to end the trip and it is not yet completed. */
   endOtp?: DriverEndOtpView;
@@ -231,6 +339,7 @@ export class RideViewService {
     private readonly driverModel: Model<DriverProfile>,
     private readonly locations: LocationsService,
     private readonly driverLocations: DriverLocationService,
+    private readonly commissions: CommissionService,
     config: ConfigService,
   ) {
     this.overrideWaitSeconds = config.getOrThrow<number>(
@@ -288,7 +397,14 @@ export class RideViewService {
         discount: ride.fare.discount,
         payableFare: ride.fare.payableFare,
         final: finalFareView(ride.fare.final),
+        pricingMode: ride.fare.pricingMode ?? DEFAULT_PRICING_MODE,
+        quotedFare: ride.fare.quotedFare,
+        quotedAt: ride.fare.quotedAt,
+        adjustments: ride.fare.adjustments?.length
+          ? ride.fare.adjustments.map(adjustmentView)
+          : undefined,
       },
+      waiting: waitingView(ride),
       requestedAt: ride.requestedAt,
       assignedAt: ride.assignedAt,
       acceptedAt: ride.acceptedAt,
@@ -382,6 +498,7 @@ export class RideViewService {
     const engaged = DRIVER_ENGAGED_STATUSES.includes(ride.status);
     return {
       ...this.base(ride),
+      earning: await this.earningFor(ride),
       customer: {
         name: engaged
           ? fullName(customer)
@@ -410,6 +527,30 @@ export class RideViewService {
           )
         : ride.driverDistanceMeters,
     };
+  }
+
+  /** Fare less commission, at the rate in force now (the final earning uses the rate at completion). */
+  private async earningFor(
+    ride: RideDocument,
+  ): Promise<DriverEarningView | undefined> {
+    try {
+      const commission = await this.commissions.resolve(
+        ride.rideType,
+        ride.completedAt ?? new Date(),
+      );
+      const gross = ride.fare.finalFare ?? ride.fare.estimatedFare;
+      const split = splitFare(toPaise(gross), commission.value);
+      return {
+        gross,
+        commissionPercent: commission.value,
+        commission: toRupees(split.commissionPaise),
+        net: toRupees(split.netEarningPaise),
+        final: ride.fare.finalFare !== undefined,
+      };
+    } catch {
+      // An offer must still show without an earning estimate.
+      return undefined;
+    }
   }
 
   async driverInfo(

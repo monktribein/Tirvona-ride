@@ -718,7 +718,6 @@ describe("Ride distance & matching configuration (e2e)", () => {
       code: "CAB_XL",
       displayName: "Cab XL",
       icon: "cab_xl",
-      vehicleType: "CAB",
       seatCapacity: 6,
     };
     const tariff = {
@@ -822,7 +821,6 @@ describe("Ride distance & matching configuration (e2e)", () => {
           code: "AUTO_PLUS",
           displayName: "Auto Plus",
           icon: "auto",
-          vehicleType: "AUTO",
           seatCapacity: 3,
           isActive: true,
           pricing: tariff,

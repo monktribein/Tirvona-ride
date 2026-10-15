@@ -1,9 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { Transform, Type } from "class-transformer";
 import {
+  IsBoolean,
   IsEnum,
   IsInt,
+  IsNumber,
   IsOptional,
+  IsPositive,
   IsString,
   Length,
   Matches,
@@ -11,6 +14,7 @@ import {
   Min,
 } from "class-validator";
 import { RIDE_TYPE_CODE_PATTERN } from "../../ride-types/schemas/ride-type.schema";
+import { FareAdjustmentType } from "../../rides/schemas/ride.schema";
 import { RideStatus } from "../../rides/ride-state-machine";
 
 export class AdminListRidesQueryDto {
@@ -78,4 +82,30 @@ export class AdminCancelRideDto {
   @IsString()
   @Length(3, 240)
   reason!: string;
+}
+
+export class AdminFareAdjustmentDto {
+  @ApiProperty({
+    enum: FareAdjustmentType,
+    description:
+      "CREDIT lowers what the customer owes; CHARGE raises it (needs the customer's consent)",
+  })
+  @IsEnum(FareAdjustmentType)
+  type!: FareAdjustmentType;
+
+  @ApiProperty({ example: 20, description: "Positive rupees" })
+  @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 })
+  @IsPositive()
+  @Max(10_000)
+  amount!: number;
+
+  @ApiProperty({ example: "Driver took a longer route; goodwill credit" })
+  @IsString()
+  @Length(5, 240)
+  reason!: string;
+
+  @ApiPropertyOptional({ description: "The customer agreed to the extra charge" })
+  @IsOptional()
+  @IsBoolean()
+  customerConsent?: boolean;
 }

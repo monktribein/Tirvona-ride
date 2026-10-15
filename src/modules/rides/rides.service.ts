@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { HttpStatus, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { InjectModel } from "@nestjs/mongoose";
 import type { Model, QueryFilter } from "mongoose";
@@ -19,9 +19,18 @@ import type { GeoCoordinates } from "../locations/geo";
 import type { RouteEstimate } from "../locations/route-estimator";
 import { MatchingService } from "../matching/matching.service";
 import { PricingService } from "../pricing/pricing.service";
+import {
+  DEFAULT_PRICING_MODE,
+  PricingMode,
+  bufferedDurationSeconds,
+} from "../pricing/upfront-fare";
+import type { FareSettings, WaitingTerms } from "../pricing/upfront-fare";
 import type { AppliedPeak } from "../pricing/peak-pricing";
 import type { PricedFare } from "../pricing/pricing.service";
-import { RideTypesService } from "../ride-types/ride-types.service";
+import {
+  RideTypesService,
+  waitingTermsOf,
+} from "../ride-types/ride-types.service";
 import type { RideTypeDocument } from "../ride-types/schemas/ride-type.schema";
 import type { VehicleType } from "../vehicles/schemas/vehicle.schema";
 import { UserStatus } from "../users/schemas/user.schema";
@@ -81,6 +90,12 @@ export interface FareEstimateView {
     estimatedFare: number;
   };
   pricingVersion: number;
+  /** UPFRONT: `fare.estimatedFare` is locked for `quote.validUntil` and is what the ride costs. */
+  pricingMode: PricingMode;
+  /** Upfront quotes only: the lock the booking request echoes back (expectedFare + quotedAt). */
+  quote?: FareQuoteView;
+  /** Upfront ride types only: the waiting terms, shown before booking. */
+  waiting?: WaitingTerms;
   /**
    * How long the nearest free driver of this ride type's vehicle would take
    * to reach the pickup (straight line, road-adjusted); null when none is
@@ -90,6 +105,21 @@ export interface FareEstimateView {
   pickupEtaSeconds: number | null;
   /** Free drivers of this vehicle type within the matching radius. */
   driversNearby: number;
+}
+
+/** An upfront quote: the price is held until `validUntil` (server clock). */
+export interface FareQuoteView {
+  locked: true;
+  quotedAt: Date;
+  validUntil: Date;
+  validForSeconds: number;
+}
+
+/** A trip priced for a ride type: the fare, and the quote it carries when the type is upfront. */
+interface QuotedFare {
+  fare: PricedFare;
+  mode: PricingMode;
+  quote?: { quotedAt: Date; settings: FareSettings };
 }
 
 export interface Page<T> {
@@ -155,20 +185,17 @@ export class RidesService {
       this.tripPolicy.estimateTrip(rideType.code, dto.pickup, dto.destination),
       this.driverSupply(dto.pickup),
     ]);
-    const fare = await this.pricing.priceTrip(
-      rideType.code,
-      route.distanceMeters,
-      route.durationSeconds,
-    );
-    return this.toEstimate(rideType, route, fare, supply);
+    const priced = await this.quoteFare(rideType, route);
+    return this.toEstimate(rideType, route, priced, supply);
   }
 
   /** One route calculation, priced for every bookable ride type. */
   async estimateAll(dto: TripDto): Promise<FareEstimateView[]> {
     await this.zones.assertServiceable(dto.pickup);
-    const [rideTypes, supply] = await Promise.all([
+    const [rideTypes, supply, fareSettings] = await Promise.all([
       this.rideTypes.listActive(),
       this.driverSupply(dto.pickup),
+      this.platformSettings.fareSettings(),
     ]);
     // Each ride type is judged by its own distance limits; the route is fetched once.
     const outcomes = await this.tripPolicy.estimateTripForAll(
@@ -188,12 +215,8 @@ export class RidesService {
         if (!outcome?.ok) return null;
         const { route } = outcome;
         try {
-          const fare = await this.pricing.priceTrip(
-            rideType.code,
-            route.distanceMeters,
-            route.durationSeconds,
-          );
-          return this.toEstimate(rideType, route, fare, supply);
+          const priced = await this.quoteFare(rideType, route, fareSettings);
+          return this.toEstimate(rideType, route, priced, supply);
         } catch (error) {
           // A ride type without a tariff is hidden rather than failing the list.
           this.logger.warn(
@@ -235,11 +258,10 @@ export class RidesService {
       dto.pickup,
       dto.destination,
     );
-    const fare = await this.pricing.priceTrip(
-      rideType.code,
-      route.distanceMeters,
-      route.durationSeconds,
-    );
+    const priced = await this.quoteFare(rideType, route);
+    const fare = priced.fare;
+    // A customer who saw an upfront price is never booked at a different one.
+    await this.assertQuoteHonoured(dto, rideType, route, priced);
     // Service availability: once zones are defined, pickups must lie in one.
     const zone = await this.zones.assertServiceable(dto.pickup);
 
@@ -285,6 +307,18 @@ export class RidesService {
           minimumFareApplied: fare.minimumFareApplied,
           estimatedFare: fare.total,
           pricingVersion: fare.pricingVersion,
+          // The charging rules this ride finishes under, whatever the admin edits later.
+          pricingMode: priced.mode,
+          ...(priced.quote
+            ? {
+                quotedFare: fare.total,
+                quotedAt: priced.quote.quotedAt,
+                bufferPercent: priced.quote.settings.etaBufferPercent,
+                waiting: waitingTermsOf(rideType),
+                earlyDropThresholdPercent:
+                  priced.quote.settings.earlyDropThresholdPercent,
+              }
+            : {}),
           ...(promo
             ? {
                 discount: promo.estimatedDiscount,
@@ -323,6 +357,7 @@ export class RidesService {
       metadata: {
         estimatedFare: fare.total,
         pricingVersion: fare.pricingVersion,
+        pricingMode: priced.mode,
         ...(fare.peak
           ? { peakSlot: fare.peak.name, peakHikePercent: fare.peak.hikePercent }
           : {}),
@@ -559,6 +594,91 @@ export class RidesService {
   }
 
   /**
+   * Prices a trip for a ride type. METERED types are quoted on the route as
+   * is (the real fare is worked out at completion). UPFRONT types are quoted
+   * on the route duration plus the ETA buffer, and that quote IS the fare, so
+   * the estimate screens and the booking always agree.
+   */
+  private async quoteFare(
+    rideType: RideTypeDocument,
+    route: RouteEstimate,
+    settings?: FareSettings,
+  ): Promise<QuotedFare> {
+    const mode = rideType.pricingMode ?? DEFAULT_PRICING_MODE;
+    if (mode !== PricingMode.UPFRONT)
+      return {
+        mode,
+        fare: await this.pricing.priceTrip(
+          rideType.code,
+          route.distanceMeters,
+          route.durationSeconds,
+        ),
+      };
+    const fareSettings =
+      settings ?? (await this.platformSettings.fareSettings());
+    const quotedAt = new Date();
+    return {
+      mode,
+      fare: await this.pricing.priceTrip(
+        rideType.code,
+        route.distanceMeters,
+        bufferedDurationSeconds(
+          route.durationSeconds,
+          fareSettings.etaBufferPercent,
+        ),
+        quotedAt,
+      ),
+      quote: { quotedAt, settings: fareSettings },
+    };
+  }
+
+  /**
+   * PRICE_CHANGED (409) when the customer's quote can no longer be honoured:
+   * the server's price differs from `expectedFare`, or the quote is older
+   * than the validity window. It carries a fresh estimate so the app can show
+   * the new price and ask again. Skipped for metered types and for older apps
+   * that send neither field.
+   */
+  private async assertQuoteHonoured(
+    dto: CreateRideDto,
+    rideType: RideTypeDocument,
+    route: RouteEstimate,
+    priced: QuotedFare,
+  ): Promise<void> {
+    if (!priced.quote) return;
+    const now = Date.now();
+    const quotedAt = dto.quotedAt
+      ? new Date(dto.quotedAt).getTime()
+      : undefined;
+    const expired =
+      quotedAt !== undefined &&
+      now - quotedAt > priced.quote.settings.quoteValiditySeconds * 1000;
+    const changed =
+      dto.expectedFare !== undefined &&
+      Math.abs(dto.expectedFare - priced.fare.total) >= 0.005;
+    if (!expired && !changed) return;
+    const estimate = this.toEstimate(
+      rideType,
+      route,
+      priced,
+      await this.driverSupply(dto.pickup),
+    );
+    throw new ApiException(
+      HttpStatus.CONFLICT,
+      changed
+        ? "The fare for this trip has changed. Please review the new fare."
+        : "Your fare quote has expired. Please review the fare again.",
+      "PRICE_CHANGED",
+      {
+        reason: changed ? "PRICE_CHANGED" : "QUOTE_EXPIRED",
+        previousFare: dto.expectedFare,
+        newFare: priced.fare.total,
+        estimate,
+      },
+    );
+  }
+
+  /**
    * Free drivers around the pickup, per vehicle type: how many, and how far
    * the nearest is. One geo query for every ride type on the quote. Supply
    * is decoration on a quote, so a failure here never fails the estimate.
@@ -613,9 +733,10 @@ export class RidesService {
   private toEstimate(
     rideType: RideTypeDocument,
     route: RouteEstimate,
-    fare: PricedFare,
+    priced: QuotedFare,
     supply: DriverSupply,
   ): FareEstimateView {
+    const fare = priced.fare;
     const available = supply.get(rideType.vehicleType);
     return {
       rideType: rideType.code,
@@ -642,6 +763,21 @@ export class RidesService {
         estimatedFare: fare.total,
       },
       pricingVersion: fare.pricingVersion,
+      pricingMode: priced.mode,
+      ...(priced.quote
+        ? {
+            quote: {
+              locked: true as const,
+              quotedAt: priced.quote.quotedAt,
+              validUntil: new Date(
+                priced.quote.quotedAt.getTime() +
+                  priced.quote.settings.quoteValiditySeconds * 1000,
+              ),
+              validForSeconds: priced.quote.settings.quoteValiditySeconds,
+            },
+            waiting: waitingTermsOf(rideType),
+          }
+        : {}),
       pickupEtaSeconds: available
         ? this.pickupEtaSeconds(available.nearestMeters)
         : null,

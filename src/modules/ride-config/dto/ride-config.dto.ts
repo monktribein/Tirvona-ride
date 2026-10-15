@@ -1,5 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsInt, IsNumber, IsPositive, ValidateIf } from "class-validator";
+import {
+  IsInt,
+  IsNumber,
+  IsPositive,
+  Max,
+  Min,
+  ValidateIf,
+} from "class-validator";
+import { FARE_SETTING_LIMITS } from "../../pricing/upfront-fare";
 
 // Absent = keep the stored value. Unlike @IsOptional, an explicit null is NOT skipped: it fails the number check.
 const whenSent = () =>
@@ -46,6 +54,39 @@ export class UpdatePlatformSettingsDto {
   @IsNumber(DECIMALS)
   @IsPositive()
   nearbyDriversRadiusKm?: number;
+
+  @ApiPropertyOptional({
+    example: 300,
+    description:
+      "How long an upfront quote can be confirmed before the app must ask again, in seconds",
+  })
+  @whenSent()
+  @IsInt()
+  @Min(FARE_SETTING_LIMITS.quoteValiditySeconds.min)
+  @Max(FARE_SETTING_LIMITS.quoteValiditySeconds.max)
+  quoteValiditySeconds?: number;
+
+  @ApiPropertyOptional({
+    example: 10,
+    description:
+      "Percent added to the route ETA when pricing an upfront quote (slack for traffic)",
+  })
+  @whenSent()
+  @IsInt()
+  @Min(FARE_SETTING_LIMITS.etaBufferPercent.min)
+  @Max(FARE_SETTING_LIMITS.etaBufferPercent.max)
+  etaBufferPercent?: number;
+
+  @ApiPropertyOptional({
+    example: 70,
+    description:
+      "An upfront trip that ends short of this percent of the booked distance is priced on the distance travelled",
+  })
+  @whenSent()
+  @IsInt()
+  @Min(FARE_SETTING_LIMITS.earlyDropThresholdPercent.min)
+  @Max(FARE_SETTING_LIMITS.earlyDropThresholdPercent.max)
+  earlyDropThresholdPercent?: number;
 }
 
 /** Both limits at once, for creating a ride type. */

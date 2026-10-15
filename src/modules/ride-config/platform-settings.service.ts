@@ -6,6 +6,11 @@ import {
   ApiException,
   apiBadRequest,
 } from "../../common/exceptions/api.exception";
+import {
+  FARE_SETTING_DEFAULTS,
+  FARE_SETTING_LIMITS,
+} from "../pricing/upfront-fare";
+import type { FareSettings } from "../pricing/upfront-fare";
 import { radiiProblem } from "./distance-policy";
 import { MIGRATION_DEFAULTS } from "./ride-config.limits";
 import {
@@ -17,7 +22,7 @@ import type { PlatformSettingsDocument } from "./schemas/platform-settings.schem
 const isDuplicateKey = (error: unknown): boolean =>
   (error as { code?: number } | undefined)?.code === 11000;
 
-export interface PlatformSettingsView {
+export interface PlatformSettingsView extends FareSettings {
   matchingRadiusKm: number;
   nearbyDriversRadiusKm: number;
   version: number;
@@ -25,9 +30,30 @@ export interface PlatformSettingsView {
   updatedAt: Date;
 }
 
-export interface RadiiChanges {
+export interface RadiiChanges extends Partial<FareSettings> {
   matchingRadiusKm?: number;
   nearbyDriversRadiusKm?: number;
+}
+
+const FARE_SETTING_KEYS = [
+  "quoteValiditySeconds",
+  "etaBufferPercent",
+  "earlyDropThresholdPercent",
+] as const;
+
+function fareSettingsOf(
+  settings: Partial<FareSettings> | null | undefined,
+): FareSettings {
+  return {
+    quoteValiditySeconds:
+      settings?.quoteValiditySeconds ??
+      FARE_SETTING_DEFAULTS.quoteValiditySeconds,
+    etaBufferPercent:
+      settings?.etaBufferPercent ?? FARE_SETTING_DEFAULTS.etaBufferPercent,
+    earlyDropThresholdPercent:
+      settings?.earlyDropThresholdPercent ??
+      FARE_SETTING_DEFAULTS.earlyDropThresholdPercent,
+  };
 }
 
 /**
@@ -48,6 +74,7 @@ export class PlatformSettingsService {
     return {
       matchingRadiusKm: settings.matchingRadiusKm,
       nearbyDriversRadiusKm: settings.nearbyDriversRadiusKm,
+      ...fareSettingsOf(settings),
       version: settings.version,
       updatedBy: settings.updatedBy?.toString(),
       updatedAt: settings.get("updatedAt") as Date,
@@ -58,6 +85,15 @@ export class PlatformSettingsService {
     return this.settingsModel
       .findOne({ key: RIDE_MATCHING_SETTINGS_KEY })
       .exec();
+  }
+
+  /**
+   * Upfront-fare settings, read on every call like the radii. Unlike the
+   * radii they have safe defaults, so a missing document or field is the
+   * default rather than a 503.
+   */
+  async fareSettings(): Promise<FareSettings> {
+    return fareSettingsOf(await this.find());
   }
 
   async getRequired(): Promise<PlatformSettingsDocument> {
@@ -108,11 +144,32 @@ export class PlatformSettingsService {
     };
     const problem = radiiProblem(merged);
     if (problem) throw apiBadRequest(problem, "VALIDATION_FAILED");
+    const fareChanges = Object.fromEntries(
+      FARE_SETTING_KEYS.filter((key) => changes[key] !== undefined).map(
+        (key) => [key, changes[key]],
+      ),
+    );
+    for (const [key, value] of Object.entries(fareChanges)) {
+      const limits = FARE_SETTING_LIMITS[key as (typeof FARE_SETTING_KEYS)[number]];
+      if (
+        typeof value !== "number" ||
+        value < limits.min ||
+        value > limits.max
+      )
+        throw apiBadRequest(
+          `${key} must be between ${limits.min} and ${limits.max}`,
+          "VALIDATION_FAILED",
+        );
+    }
     const after = await this.settingsModel
       .findOneAndUpdate(
         { key: RIDE_MATCHING_SETTINGS_KEY },
         {
-          $set: { ...merged, updatedBy: new Types.ObjectId(adminId) },
+          $set: {
+            ...merged,
+            ...fareChanges,
+            updatedBy: new Types.ObjectId(adminId),
+          },
           $inc: { version: 1 },
           $setOnInsert: { key: RIDE_MATCHING_SETTINGS_KEY },
         },

@@ -12,6 +12,13 @@ import { CheckpointKind } from "../locations/schemas/driver-location-checkpoint.
 import { MatchingService } from "../matching/matching.service";
 import type { FinalFareMode } from "../../config/environment";
 import { measureTrip, resolveFinalFare } from "../pricing/trip-meter";
+import type { TripMeasurement } from "../pricing/trip-meter";
+import {
+  FARE_SETTING_DEFAULTS,
+  PricingMode,
+  WAITING_DEFAULTS,
+  resolveUpfrontFare,
+} from "../pricing/upfront-fare";
 import { CancellationsService } from "../cancellations/cancellations.service";
 import type {
   CancellationPreview,
@@ -51,6 +58,16 @@ import { Ride } from "./schemas/ride.schema";
 import type { RideDocument, RideFinalFare } from "./schemas/ride.schema";
 
 const MAX_CANCEL_RETRIES = 3;
+
+/** What completing a ride bills: the totals, the frozen snapshot and the audit trail. */
+interface CompletionPricing {
+  finalFare: number;
+  discount: number;
+  payableFare: number;
+  snapshot: RideFinalFare;
+  /** Added to the COMPLETED transition's metadata. */
+  metadata: Record<string, unknown>;
+}
 
 /**
  * Driver actions (accept → arrived → start → complete, or reject) and
@@ -604,8 +621,10 @@ export class RideLifecycleService {
   ): Promise<RideDocument | null> {
     const driverId = ride.driverId as Types.ObjectId;
     const completedAt = ride.endRequestedAt ?? new Date();
+    const upfront = ride.fare.pricingMode === PricingMode.UPFRONT;
+    // Upfront rides need the trail even in FINAL_FARE_MODE=booked: an early drop is judged on it.
     const measurement =
-      this.finalFareMode === "actual" && ride.startedAt
+      (this.finalFareMode === "actual" || upfront) && ride.startedAt
         ? measureTrip(
             await this.locations.tripTrail(
               ride._id,
@@ -616,42 +635,10 @@ export class RideLifecycleService {
             this.tripMeterMaxGapSeconds,
           )
         : undefined;
-    const priced = resolveFinalFare({
-      mode: this.finalFareMode,
-      rates: ride.fare,
-      bookedDistanceMeters: ride.distanceMeters,
-      bookedDurationSeconds: ride.durationSeconds,
-      estimatedFare: ride.fare.estimatedFare,
-      startedAt: ride.startedAt,
-      completedAt,
-      measurement,
-      maxEstimateMultiplier: this.finalFareMaxEstimateMultiplier,
-    });
-    const finalFare = priced.total;
-    // A promo applied at booking is priced again on the final fare with the
-    // rules frozen on the ride (the admin may have edited the promo since).
-    const discount = ride.promo ? computeDiscount(ride.promo, finalFare) : 0;
-    const payableFare = finalFare - discount;
-    const snapshot: RideFinalFare = {
-      distanceMeters: priced.distanceMeters,
-      durationSeconds: priced.durationSeconds,
-      distanceSource: priced.distanceSource,
-      durationSource: priced.durationSource,
-      measuredDistanceMeters: priced.measuredDistanceMeters,
-      baseFare: priced.breakdown.baseFare,
-      distanceCharge: priced.breakdown.distanceCharge,
-      timeCharge: priced.breakdown.timeCharge,
-      subtotal: priced.breakdown.subtotal,
-      minimumFareApplied: priced.breakdown.minimumFareApplied,
-      capApplied: priced.capApplied,
-      uncappedFare: priced.uncappedFare,
-      total: finalFare,
-      discount,
-      payable: payableFare,
-      pricingVersion: ride.fare.pricingVersion,
-      mode: this.finalFareMode,
-      computedAt: new Date(),
-    };
+    const pricing = upfront
+      ? this.priceUpfront(ride, completedAt, measurement)
+      : this.priceMetered(ride, completedAt, measurement);
+    const { finalFare, discount, payableFare, snapshot } = pricing;
 
     const completed = await this.transitions.apply({
       rideId: ride._id,
@@ -695,9 +682,7 @@ export class RideLifecycleService {
                 ride.endCheck.distanceToDestinationMeters,
             }
           : {}),
-        distanceMeters: priced.distanceMeters,
-        distanceSource: priced.distanceSource,
-        durationSeconds: priced.durationSeconds,
+        ...pricing.metadata,
         ...(measurement
           ? {
               trail: {
@@ -706,9 +691,6 @@ export class RideLifecycleService {
                 reason: measurement.reason,
               },
             }
-          : {}),
-        ...(priced.capApplied
-          ? { capApplied: true, uncappedFare: priced.uncappedFare }
           : {}),
         ...(ride.promo
           ? { discount, payableFare, promoCode: ride.promo.code }
@@ -727,6 +709,144 @@ export class RideLifecycleService {
     );
     this.dispatch.kick();
     return completed;
+  }
+
+  /** METERED: the fare of the actual trip, within the customer-protection cap (unchanged behaviour). */
+  private priceMetered(
+    ride: RideDocument,
+    completedAt: Date,
+    measurement: TripMeasurement | undefined,
+  ): CompletionPricing {
+    const priced = resolveFinalFare({
+      mode: this.finalFareMode,
+      rates: ride.fare,
+      bookedDistanceMeters: ride.distanceMeters,
+      bookedDurationSeconds: ride.durationSeconds,
+      estimatedFare: ride.fare.estimatedFare,
+      startedAt: ride.startedAt,
+      completedAt,
+      measurement,
+      maxEstimateMultiplier: this.finalFareMaxEstimateMultiplier,
+    });
+    const finalFare = priced.total;
+    // A promo applied at booking is priced again on the final fare with the
+    // rules frozen on the ride (the admin may have edited the promo since).
+    const discount = ride.promo ? computeDiscount(ride.promo, finalFare) : 0;
+    const payableFare = finalFare - discount;
+    return {
+      finalFare,
+      discount,
+      payableFare,
+      snapshot: {
+        distanceMeters: priced.distanceMeters,
+        durationSeconds: priced.durationSeconds,
+        distanceSource: priced.distanceSource,
+        durationSource: priced.durationSource,
+        measuredDistanceMeters: priced.measuredDistanceMeters,
+        baseFare: priced.breakdown.baseFare,
+        distanceCharge: priced.breakdown.distanceCharge,
+        timeCharge: priced.breakdown.timeCharge,
+        subtotal: priced.breakdown.subtotal,
+        minimumFareApplied: priced.breakdown.minimumFareApplied,
+        capApplied: priced.capApplied,
+        uncappedFare: priced.uncappedFare,
+        total: finalFare,
+        discount,
+        payable: payableFare,
+        pricingVersion: ride.fare.pricingVersion,
+        mode: this.finalFareMode,
+        computedAt: new Date(),
+      },
+      metadata: {
+        distanceMeters: priced.distanceMeters,
+        distanceSource: priced.distanceSource,
+        durationSeconds: priced.durationSeconds,
+        ...(priced.capApplied
+          ? { capApplied: true, uncappedFare: priced.uncappedFare }
+          : {}),
+      },
+    };
+  }
+
+  /**
+   * UPFRONT: the quote the customer accepted IS the fare — no recalculation
+   * from time or distance. Exceptions, all from the terms frozen on the ride:
+   * an early drop is priced on the distance actually travelled (never above
+   * the quote), and a wait at the pickup past the free minutes is added as its
+   * own line. The promo discounts the base fare, not the waiting charge.
+   */
+  private priceUpfront(
+    ride: RideDocument,
+    completedAt: Date,
+    measurement: TripMeasurement | undefined,
+  ): CompletionPricing {
+    const quotedFare = ride.fare.quotedFare ?? ride.fare.estimatedFare;
+    const result = resolveUpfrontFare({
+      quotedFare,
+      rates: ride.fare,
+      bookedDistanceMeters: ride.distanceMeters,
+      arrivedAt: ride.arrivedAt,
+      startedAt: ride.startedAt,
+      completedAt,
+      measurement,
+      farFromDestination: ride.endCheck?.farFromDestination,
+      earlyDropThresholdPercent:
+        ride.fare.earlyDropThresholdPercent ??
+        FARE_SETTING_DEFAULTS.earlyDropThresholdPercent,
+      waiting: ride.fare.waiting ?? WAITING_DEFAULTS,
+    });
+    const finalFare = result.total;
+    const discount = ride.promo ? computeDiscount(ride.promo, result.base) : 0;
+    const payableFare = Math.max(0, finalFare - discount);
+    // The bill's components: the quote's own, or the actual trip's after an early drop.
+    const components = result.breakdown ?? ride.fare;
+    return {
+      finalFare,
+      discount,
+      payableFare,
+      snapshot: {
+        distanceMeters: result.actualDistanceMeters,
+        durationSeconds: result.actualDurationSeconds,
+        distanceSource: result.distanceSource,
+        durationSource: ride.startedAt ? "ACTUAL" : "BOOKED",
+        measuredDistanceMeters: measurement?.distanceMeters,
+        baseFare: components.baseFare,
+        distanceCharge: components.distanceCharge,
+        timeCharge: components.timeCharge,
+        subtotal: components.subtotal,
+        minimumFareApplied: components.minimumFareApplied,
+        capApplied: false,
+        total: finalFare,
+        discount,
+        payable: payableFare,
+        pricingVersion: ride.fare.pricingVersion,
+        mode: "upfront",
+        computedAt: new Date(),
+        quotedFare,
+        waitingCharge: result.waiting.charge,
+        waitingSeconds: result.waiting.waitedSeconds,
+        waitingChargeableMinutes: result.waiting.chargeableMinutes,
+        earlyDrop: result.earlyDrop,
+        meteredEquivalent: result.actual.total,
+      },
+      metadata: {
+        pricingMode: PricingMode.UPFRONT,
+        quotedFare,
+        baseFare: result.base,
+        distanceMeters: result.actualDistanceMeters,
+        distanceSource: result.distanceSource,
+        durationSeconds: result.actualDurationSeconds,
+        ...(result.waiting.charge > 0
+          ? {
+              waitingCharge: result.waiting.charge,
+              waitingSeconds: result.waiting.waitedSeconds,
+            }
+          : {}),
+        ...(result.earlyDrop
+          ? { earlyDrop: true, meteredEquivalent: result.actual.total }
+          : {}),
+      },
+    };
   }
 
   /**

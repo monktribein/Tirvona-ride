@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose";
 import type { HydratedDocument } from "mongoose";
+import { PricingMode, WAITING_DEFAULTS, WAITING_LIMITS } from "../../pricing/upfront-fare";
 import type { VehicleType } from "../../vehicles/schemas/vehicle.schema";
 
 /**
@@ -50,6 +51,49 @@ export class RideType {
 
   @Prop({ required: true, min: 1, max: MAX_SEAT_CAPACITY })
   seatCapacity!: number;
+
+  /**
+   * Whether a driver of this vehicle type must provide a driving licence
+   * (number, expiry and document) to complete KYC. Absent means required;
+   * an admin switches it off for types such as the e-rickshaw.
+   */
+  @Prop({ required: true, default: true })
+  licenseRequired!: boolean;
+
+  /**
+   * UPFRONT: the fare quoted at booking is the fare (plus waiting, less an
+   * early drop). METERED: recalculated from the actual trip at completion.
+   * Absent on rows from before upfront fares = METERED.
+   */
+  @Prop({ required: true, enum: PricingMode, default: PricingMode.METERED })
+  pricingMode!: PricingMode;
+
+  /** Free wait at the pickup (minutes) before waiting is charged. UPFRONT rides only. */
+  @Prop({
+    required: true,
+    default: WAITING_DEFAULTS.freeMinutes,
+    min: WAITING_LIMITS.freeMinutes.min,
+    max: WAITING_LIMITS.freeMinutes.max,
+  })
+  waitFreeMinutes!: number;
+
+  /** Rupees per chargeable waiting minute; 0 = waiting is free. */
+  @Prop({
+    required: true,
+    default: WAITING_DEFAULTS.perMinuteRate,
+    min: WAITING_LIMITS.perMinuteRate.min,
+    max: WAITING_LIMITS.perMinuteRate.max,
+  })
+  waitPerMinuteRate!: number;
+
+  /** Cap on chargeable waiting minutes. */
+  @Prop({
+    required: true,
+    default: WAITING_DEFAULTS.maxChargeMinutes,
+    min: WAITING_LIMITS.maxChargeMinutes.min,
+    max: WAITING_LIMITS.maxChargeMinutes.max,
+  })
+  waitMaxChargeMinutes!: number;
 
   @Prop({ required: true, default: 0 })
   sortOrder!: number;

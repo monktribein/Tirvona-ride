@@ -32,8 +32,10 @@ export class TripDto {
 }
 
 /**
- * Body of both POST /rides/estimate and POST /rides. There is deliberately
- * no fare field: the server always re-prices, whatever the client displayed.
+ * Body of both POST /rides/estimate and POST /rides. The server always
+ * re-prices, whatever the client displayed; the only fare the booking may
+ * carry is the one the customer saw (CreateRideDto.expectedFare), which can
+ * only ever make the server refuse, never change the price.
  */
 export class RideRequestDto extends TripDto {
   @ApiProperty({
@@ -56,6 +58,24 @@ export class CreateRideDto extends RideRequestDto {
   @IsString()
   @Length(3, 20)
   promoCode?: string;
+
+  /**
+   * Upfront rides: the fare the customer was shown and agreed to. When the
+   * server's price differs the booking is refused with PRICE_CHANGED (and the
+   * new quote), so nobody pays a price they did not see. Omitted by older apps.
+   */
+  @ApiPropertyOptional({ example: 148 })
+  @IsOptional()
+  @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(1_000_000)
+  expectedFare?: number;
+
+  /** When that quote was priced (the estimate's `quote.quotedAt`), checked against the quote validity. */
+  @ApiPropertyOptional({ example: "2026-10-15T09:30:00.000Z" })
+  @IsOptional()
+  @IsISO8601({ strict: true, strictSeparator: true })
+  quotedAt?: string;
 }
 
 export class CancelRideDto {

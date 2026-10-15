@@ -17,6 +17,7 @@ import { ParseObjectIdPipe } from "../../common/pipes/parse-object-id.pipe";
 import type { AuthenticatedUser } from "../../common/types/jwt-payload";
 import { UserRole } from "../../common/types/user-role.enum";
 import { AuditLogService } from "../audit/audit-log.service";
+import { RideFareAdjustmentService } from "../rides/ride-fare-adjustment.service";
 import { RidesAdminService } from "../rides/rides-admin.service";
 import type {
   AdminRideDetail,
@@ -26,6 +27,7 @@ import type { Page } from "../rides/rides.service";
 import {
   AdminCancelRideDto,
   AdminCompleteRideDto,
+  AdminFareAdjustmentDto,
   AdminListRidesQueryDto,
 } from "./dto/admin-rides.dto";
 
@@ -36,6 +38,7 @@ import {
 export class AdminRidesController {
   constructor(
     private readonly rides: RidesAdminService,
+    private readonly fareAdjustments: RideFareAdjustmentService,
     private readonly audit: AuditLogService,
   ) {}
 
@@ -104,5 +107,39 @@ export class AdminRidesController {
       metadata: { completionMode: "ADMIN" },
     });
     return ok(detail);
+  }
+
+  @Post(":id/fare-adjustments")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      "Adjust the fare of a completed ride before its payment starts (credit or consented charge). After payment use a refund.",
+  })
+  async adjustFare(
+    @Param("id", ParseObjectIdPipe) id: string,
+    @CurrentUser() admin: AuthenticatedUser,
+    @Body() dto: AdminFareAdjustmentDto,
+  ): Promise<ApiSuccessBody<AdminRideDetail>> {
+    const result = await this.fareAdjustments.apply(id, admin.userId, dto);
+    await this.audit.record({
+      adminId: admin.userId,
+      action: "ride.fare_adjust",
+      targetType: "RIDE",
+      targetId: id,
+      targetLabel: result.ride.rideCode,
+      reason: dto.reason,
+      metadata: {
+        type: dto.type,
+        amount: result.delta,
+        finalFareBefore: result.finalFareBefore,
+        finalFareAfter: result.finalFareAfter,
+        payableBefore: result.payableBefore,
+        payableAfter: result.payableAfter,
+        ...(dto.customerConsent !== undefined
+          ? { customerConsent: dto.customerConsent }
+          : {}),
+      },
+    });
+    return ok(await this.rides.detail(id));
   }
 }

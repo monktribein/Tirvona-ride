@@ -7,6 +7,8 @@ import {
   apiConflict,
   apiNotFound,
 } from "../../common/exceptions/api.exception";
+import { DEFAULT_PRICING_MODE, WAITING_DEFAULTS } from "../pricing/upfront-fare";
+import type { PricingMode, WaitingTerms } from "../pricing/upfront-fare";
 import type {
   CreateRideTypeDto,
   UpdateRideTypeDto,
@@ -24,9 +26,31 @@ export interface RideTypeSummary {
   /** Always equal to `code`: a ride type is a vehicle type. */
   vehicleType: string;
   seatCapacity: number;
+  /** Drivers of this vehicle type must provide a driving licence for KYC. */
+  licenseRequired: boolean;
+  /** UPFRONT (the booked fare is the fare) or METERED (recalculated at completion). */
+  pricingMode: PricingMode;
+  waitFreeMinutes: number;
+  waitPerMinuteRate: number;
+  waitMaxChargeMinutes: number;
   sortOrder: number;
   isActive: boolean;
   updatedAt: Date;
+}
+
+/** The waiting terms of a ride type, with defaults for rows from before they existed. */
+export function waitingTermsOf(
+  rideType: Pick<
+    RideTypeDocument,
+    "waitFreeMinutes" | "waitPerMinuteRate" | "waitMaxChargeMinutes"
+  >,
+): WaitingTerms {
+  return {
+    freeMinutes: rideType.waitFreeMinutes ?? WAITING_DEFAULTS.freeMinutes,
+    perMinuteRate: rideType.waitPerMinuteRate ?? WAITING_DEFAULTS.perMinuteRate,
+    maxChargeMinutes:
+      rideType.waitMaxChargeMinutes ?? WAITING_DEFAULTS.maxChargeMinutes,
+  };
 }
 
 const isDuplicateKey = (error: unknown): boolean =>
@@ -91,6 +115,13 @@ export class RideTypesService implements OnModuleInit {
       icon: rideType.icon,
       vehicleType: rideType.vehicleType,
       seatCapacity: rideType.seatCapacity,
+      licenseRequired: rideType.licenseRequired !== false,
+      pricingMode: rideType.pricingMode ?? DEFAULT_PRICING_MODE,
+      waitFreeMinutes: rideType.waitFreeMinutes ?? WAITING_DEFAULTS.freeMinutes,
+      waitPerMinuteRate:
+        rideType.waitPerMinuteRate ?? WAITING_DEFAULTS.perMinuteRate,
+      waitMaxChargeMinutes:
+        rideType.waitMaxChargeMinutes ?? WAITING_DEFAULTS.maxChargeMinutes,
       sortOrder: rideType.sortOrder,
       isActive: rideType.isActive,
       updatedAt: rideType.get("updatedAt") as Date,
@@ -114,6 +145,20 @@ export class RideTypesService implements OnModuleInit {
    */
   async listVehicleTypes(): Promise<RideTypeDocument[]> {
     return this.listAll();
+  }
+
+  /**
+   * Whether KYC needs a driving licence from drivers of this vehicle type.
+   * Unknown types and rows from before the flag existed count as required.
+   */
+  async isLicenseRequired(vehicleType: string | undefined): Promise<boolean> {
+    if (!vehicleType) return true;
+    const rideType = await this.rideTypeModel
+      .findOne({ code: vehicleType })
+      .select("licenseRequired")
+      .lean()
+      .exec();
+    return rideType?.licenseRequired !== false;
   }
 
   /** A vehicle type is valid when a ride type with that code exists. */
@@ -158,6 +203,13 @@ export class RideTypesService implements OnModuleInit {
         icon: dto.icon,
         vehicleType: dto.code,
         seatCapacity: dto.seatCapacity,
+        licenseRequired: dto.licenseRequired ?? true,
+        pricingMode: dto.pricingMode ?? DEFAULT_PRICING_MODE,
+        waitFreeMinutes: dto.waitFreeMinutes ?? WAITING_DEFAULTS.freeMinutes,
+        waitPerMinuteRate:
+          dto.waitPerMinuteRate ?? WAITING_DEFAULTS.perMinuteRate,
+        waitMaxChargeMinutes:
+          dto.waitMaxChargeMinutes ?? WAITING_DEFAULTS.maxChargeMinutes,
         sortOrder: dto.sortOrder ?? 50,
         isActive: dto.isActive ?? false,
       });
@@ -186,6 +238,15 @@ export class RideTypesService implements OnModuleInit {
     if (dto.icon !== undefined) rideType.icon = dto.icon;
     if (dto.seatCapacity !== undefined)
       rideType.seatCapacity = dto.seatCapacity;
+    if (dto.licenseRequired !== undefined)
+      rideType.licenseRequired = dto.licenseRequired;
+    if (dto.pricingMode !== undefined) rideType.pricingMode = dto.pricingMode;
+    if (dto.waitFreeMinutes !== undefined)
+      rideType.waitFreeMinutes = dto.waitFreeMinutes;
+    if (dto.waitPerMinuteRate !== undefined)
+      rideType.waitPerMinuteRate = dto.waitPerMinuteRate;
+    if (dto.waitMaxChargeMinutes !== undefined)
+      rideType.waitMaxChargeMinutes = dto.waitMaxChargeMinutes;
     if (dto.isActive !== undefined) rideType.isActive = dto.isActive;
     if (dto.sortOrder !== undefined) rideType.sortOrder = dto.sortOrder;
     await rideType.save();

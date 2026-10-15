@@ -49,6 +49,42 @@ export interface RangeView {
   timeZone: string;
 }
 
+/** One row of the quote-versus-actual report. */
+export interface FareQuoteRow {
+  rides: number;
+  /** Sum of the locked quotes, rupees. */
+  quoted: number;
+  /** Sum of what was billed for the trip itself (quote, or less after an early drop), before waiting and adjustments. */
+  billed: number;
+  /** Sum of what the actual trips cost at the metered tariff. */
+  metered: number;
+  /** billed − metered: negative = Tirvona absorbed the difference. */
+  variance: number;
+  /** variance as a percent of metered. */
+  variancePercent: number;
+  /** Rides billed below the meter, and how much those cost Tirvona. */
+  absorbedRides: number;
+  absorbed: number;
+  earlyDrops: number;
+  waitingCharges: number;
+  waitingRides: number;
+}
+
+export interface FareQuotesReport {
+  range: RangeView;
+  rideType?: string;
+  totals: FareQuoteRow;
+  byRideType: Array<FareQuoteRow & { rideType: string }>;
+  /** Routes (pickup and drop-off rounded to ~1 km cells), worst first. */
+  byRoute: Array<
+    FareQuoteRow & {
+      rideType: string;
+      pickup: { latitude: number; longitude: number; address: string };
+      destination: { latitude: number; longitude: number; address: string };
+    }
+  >;
+}
+
 export interface OverviewReport {
   range: RangeView;
   rides: {
@@ -1009,6 +1045,161 @@ export class ReportsService {
   }
 
   // ── Cancellations ─────────────────────────────────────────────────────
+
+  /**
+   * Upfront quotes versus the trips actually made, for completed upfront
+   * rides: the evidence for tuning the ETA buffer and spotting routes that
+   * lose money. "Metered" is what the same trip would have cost on the meter.
+   */
+  async fareQuotes(
+    range: ReportRange,
+    rideType?: string,
+  ): Promise<FareQuotesReport> {
+    const ROUTE_CELL = 100; // 0.01° ≈ 1.1 km
+    const moneyGroup = {
+      rides: { $sum: 1 },
+      quoted: { $sum: { $ifNull: ["$fare.final.quotedFare", 0] } },
+      billed: { $sum: "$billedBase" },
+      metered: { $sum: { $ifNull: ["$fare.final.meteredEquivalent", 0] } },
+      absorbedRides: {
+        $sum: { $cond: [{ $lt: ["$variance", 0] }, 1, 0] },
+      },
+      absorbed: {
+        $sum: { $cond: [{ $lt: ["$variance", 0] }, "$variance", 0] },
+      },
+      earlyDrops: { $sum: { $cond: ["$fare.final.earlyDrop", 1, 0] } },
+      waitingCharges: { $sum: { $ifNull: ["$fare.final.waitingCharge", 0] } },
+      waitingRides: {
+        $sum: {
+          $cond: [{ $gt: [{ $ifNull: ["$fare.final.waitingCharge", 0] }, 0] }, 1, 0],
+        },
+      },
+    };
+    const cell = (path: string) => ({
+      $round: [{ $multiply: [path, ROUTE_CELL] }, 0],
+    });
+    const pipeline: PipelineStage[] = [
+      {
+        $match: {
+          status: RideStatus.COMPLETED,
+          completedAt: { $gte: range.from, $lt: range.to },
+          "fare.pricingMode": "UPFRONT",
+          "fare.final.meteredEquivalent": { $exists: true },
+          ...(rideType ? { rideType } : {}),
+        },
+      },
+      {
+        $addFields: {
+          billedBase: {
+            $subtract: [
+              "$fare.final.total",
+              {
+                $add: [
+                  { $ifNull: ["$fare.final.waitingCharge", 0] },
+                  { $ifNull: ["$fare.final.adjustmentsTotal", 0] },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          variance: {
+            $subtract: ["$billedBase", "$fare.final.meteredEquivalent"],
+          },
+        },
+      },
+      {
+        $facet: {
+          totals: [{ $group: { _id: null, ...moneyGroup } }],
+          byRideType: [
+            { $group: { _id: "$rideType", ...moneyGroup } },
+            { $sort: { rides: -1 } },
+          ],
+          byRoute: [
+            {
+              $group: {
+                _id: {
+                  rideType: "$rideType",
+                  pLat: cell("$pickup.latitude"),
+                  pLng: cell("$pickup.longitude"),
+                  dLat: cell("$destination.latitude"),
+                  dLng: cell("$destination.longitude"),
+                },
+                pickup: { $first: "$pickup" },
+                destination: { $first: "$destination" },
+                ...moneyGroup,
+              },
+            },
+            { $addFields: { variance: { $subtract: ["$billed", "$metered"] } } },
+            { $sort: { variance: 1, rides: -1 } },
+            { $limit: 25 },
+          ],
+        },
+      },
+    ];
+    type Money = Omit<FareQuoteRow, "variance" | "variancePercent">;
+    const [result] = await this.rideModel
+      .aggregate<{
+        totals: Money[];
+        byRideType: Array<Money & { _id: string }>;
+        byRoute: Array<
+          Money & {
+            _id: { rideType: string };
+            pickup: { latitude: number; longitude: number; address: string };
+            destination: {
+              latitude: number;
+              longitude: number;
+              address: string;
+            };
+          }
+        >;
+      }>(pipeline)
+      .exec();
+    const row = (money?: Money): FareQuoteRow => {
+      const m = money ?? {
+        rides: 0,
+        quoted: 0,
+        billed: 0,
+        metered: 0,
+        absorbedRides: 0,
+        absorbed: 0,
+        earlyDrops: 0,
+        waitingCharges: 0,
+        waitingRides: 0,
+      };
+      const variance = round2(m.billed - m.metered);
+      return {
+        rides: m.rides,
+        quoted: round2(m.quoted),
+        billed: round2(m.billed),
+        metered: round2(m.metered),
+        variance,
+        variancePercent: m.metered > 0 ? round2((variance / m.metered) * 100) : 0,
+        absorbedRides: m.absorbedRides,
+        absorbed: round2(m.absorbed),
+        earlyDrops: m.earlyDrops,
+        waitingCharges: round2(m.waitingCharges),
+        waitingRides: m.waitingRides,
+      };
+    };
+    return {
+      range: this.rangeView(range),
+      ...(rideType ? { rideType } : {}),
+      totals: row(result?.totals[0]),
+      byRideType: (result?.byRideType ?? []).map((entry) => ({
+        rideType: entry._id,
+        ...row(entry),
+      })),
+      byRoute: (result?.byRoute ?? []).map((entry) => ({
+        rideType: entry._id.rideType,
+        pickup: entry.pickup,
+        destination: entry.destination,
+        ...row(entry),
+      })),
+    };
+  }
 
   async cancellations(range: ReportRange): Promise<CancellationsReport> {
     const window = { $gte: range.from, $lt: range.to };
