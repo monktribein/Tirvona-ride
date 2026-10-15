@@ -5,7 +5,6 @@ import {
   FARE_SETTING_DEFAULTS,
   WAITING_DEFAULTS,
   bufferedDurationSeconds,
-  isEarlyDrop,
   resolveUpfrontFare,
   waitingCharge,
 } from "./upfront-fare";
@@ -26,10 +25,7 @@ const TERMS: WaitingTerms = {
 const T0 = new Date("2026-10-15T10:00:00.000Z");
 const after = (seconds: number): Date => new Date(T0.getTime() + seconds * 1000);
 
-const trail = (
-  distanceMeters: number,
-  reliable = true,
-): TripMeasurement => ({
+const trail = (distanceMeters: number, reliable = true): TripMeasurement => ({
   distanceMeters,
   points: 20,
   maxGapSeconds: 15,
@@ -44,11 +40,10 @@ describe("bufferedDurationSeconds", () => {
     expect(bufferedDurationSeconds(600, 0)).toBe(600);
   });
 
-  it("ships a 10% buffer, 300 s validity and 70% early drop as defaults", () => {
+  it("ships a 10% buffer and 300 s validity as defaults, and free waiting", () => {
     expect(FARE_SETTING_DEFAULTS).toEqual({
       quoteValiditySeconds: 300,
       etaBufferPercent: 10,
-      earlyDropThresholdPercent: 70,
     });
     expect(WAITING_DEFAULTS).toEqual({
       freeMinutes: 3,
@@ -122,53 +117,6 @@ describe("waitingCharge", () => {
   });
 });
 
-describe("isEarlyDrop", () => {
-  const base = {
-    bookedDistanceMeters: 10_000,
-    thresholdPercent: 70,
-    farFromDestination: true,
-  };
-
-  it("is an early drop just under the threshold, not at or over it", () => {
-    expect(isEarlyDrop({ ...base, measurement: trail(6_999) })).toBe(true);
-    expect(isEarlyDrop({ ...base, measurement: trail(7_000) })).toBe(false);
-    expect(isEarlyDrop({ ...base, measurement: trail(9_000) })).toBe(false);
-  });
-
-  it("never fires on an unreliable or missing trail", () => {
-    expect(isEarlyDrop({ ...base, measurement: trail(1_000, false) })).toBe(
-      false,
-    );
-    expect(isEarlyDrop({ ...base })).toBe(false);
-  });
-
-  it("needs the end to be far from the destination", () => {
-    expect(
-      isEarlyDrop({
-        ...base,
-        measurement: trail(1_000),
-        farFromDestination: false,
-      }),
-    ).toBe(false);
-    expect(
-      isEarlyDrop({
-        ...base,
-        measurement: trail(1_000),
-        farFromDestination: undefined,
-      }),
-    ).toBe(false);
-  });
-
-  it("follows the configured threshold", () => {
-    expect(
-      isEarlyDrop({ ...base, thresholdPercent: 50, measurement: trail(6_000) }),
-    ).toBe(false);
-    expect(
-      isEarlyDrop({ ...base, thresholdPercent: 90, measurement: trail(8_000) }),
-    ).toBe(true);
-  });
-});
-
 describe("resolveUpfrontFare", () => {
   const input = {
     quotedFare: 100,
@@ -177,8 +125,6 @@ describe("resolveUpfrontFare", () => {
     arrivedAt: T0,
     startedAt: after(120),
     completedAt: after(120 + 1_200),
-    farFromDestination: false,
-    earlyDropThresholdPercent: 70,
     waiting: TERMS,
   };
 
@@ -190,9 +136,31 @@ describe("resolveUpfrontFare", () => {
     });
     expect(slow.base).toBe(100);
     expect(slow.total).toBe(100);
-    expect(slow.earlyDrop).toBe(false);
     // The meter would have charged far more: the platform absorbs it.
     expect(slow.actual.total).toBeGreaterThan(100);
+  });
+
+  it("bills exactly the quote when the rider gets off well before the destination", () => {
+    // 2 km of a 5 km trip on a reliable trail: still the full quote.
+    const early = resolveUpfrontFare({
+      ...input,
+      measurement: trail(2_000),
+    });
+    expect(early.base).toBe(100);
+    expect(early.total).toBe(100);
+    // Only the report sees what the shorter trip would have cost.
+    expect(early.actual.total).toBe(calculateFare(RATES, 2_000, 1_200).total);
+    expect(early.actual.total).toBeLessThan(100);
+  });
+
+  it("is not affected by a missing or glitchy trail", () => {
+    const glitchy = resolveUpfrontFare({
+      ...input,
+      measurement: trail(10, false),
+    });
+    expect(glitchy.total).toBe(100);
+    expect(glitchy.distanceSource).toBe("BOOKED");
+    expect(resolveUpfrontFare({ ...input }).total).toBe(100);
   });
 
   it("adds the waiting charge as a separate amount", () => {
@@ -208,63 +176,15 @@ describe("resolveUpfrontFare", () => {
     expect(waited.total).toBe(110);
   });
 
-  it("an early drop bills the smaller of the quote and the distance travelled", () => {
-    const early = resolveUpfrontFare({
-      ...input,
-      farFromDestination: true,
-      measurement: trail(2_000),
-    });
-    const expected = calculateFare(RATES, 2_000, 1_200).total;
-    expect(early.earlyDrop).toBe(true);
-    expect(early.base).toBe(expected);
-    expect(early.base).toBeLessThan(100);
-    expect(early.breakdown?.total).toBe(expected);
-  });
-
-  it("an early drop never bills above the quote and respects the minimum fare", () => {
-    const pricey = resolveUpfrontFare({
-      ...input,
-      quotedFare: 50,
-      farFromDestination: true,
-      measurement: trail(3_000),
-      completedAt: after(120 + 3 * 3_600),
-    });
-    // The meter on a 3-hour wait would charge more than the quote: keep the quote, and do not call it an early drop.
-    expect(pricey.earlyDrop).toBe(false);
-    expect(pricey.base).toBe(50);
-
-    const tiny = resolveUpfrontFare({
-      ...input,
-      quotedFare: 100,
-      farFromDestination: true,
-      measurement: trail(100),
-      completedAt: after(120 + 60),
-    });
-    expect(tiny.base).toBe(RATES.minimumFare);
-  });
-
-  it("a GPS glitch (unreliable trail) never lowers the fare", () => {
-    const glitchy = resolveUpfrontFare({
-      ...input,
-      farFromDestination: true,
-      measurement: trail(10, false),
-    });
-    expect(glitchy.earlyDrop).toBe(false);
-    expect(glitchy.base).toBe(100);
-    expect(glitchy.distanceSource).toBe("BOOKED");
-  });
-
-  it("combines an early drop with waiting", () => {
-    const both = resolveUpfrontFare({
+  it("adds nothing for waiting at the default (free) terms", () => {
+    const result = resolveUpfrontFare({
       ...input,
       arrivedAt: T0,
-      startedAt: after(10 * 60),
-      completedAt: after(10 * 60 + 600),
-      farFromDestination: true,
-      measurement: trail(1_500),
+      startedAt: after(3_600),
+      completedAt: after(3_600 + 600),
+      waiting: WAITING_DEFAULTS,
     });
-    expect(both.earlyDrop).toBe(true);
-    expect(both.waiting.charge).toBe(14);
-    expect(both.total).toBe(both.base + 14);
+    expect(result.waiting.charge).toBe(0);
+    expect(result.total).toBe(100);
   });
 });

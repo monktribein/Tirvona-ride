@@ -15,7 +15,7 @@ import type { App } from "supertest/types";
  * settings, the locked quote on both estimate screens, the PRICE_CHANGED
  * refusal (and old apps that send no expected fare), completion at the quote
  * however long the trip runs, the waiting charge and its cap, the promo on
- * the base fare only, the early drop (and the GPS-glitch safety), admin fare
+ * the base fare only, the quote holding wherever the rider gets off, admin fare
  * adjustments before and after payment starts, the quote-versus-actual
  * report, and that metered ride types behave exactly as before. Hermetic:
  * in-memory MongoDB, no Redis.
@@ -297,8 +297,8 @@ describe("Upfront fares (e2e)", () => {
       expect(response.body.data.settings).toMatchObject({
         quoteValiditySeconds: 300,
         etaBufferPercent: 10,
-        earlyDropThresholdPercent: 70,
       });
+      expect(response.body.data.settings.earlyDropThresholdPercent).toBeUndefined();
       expect(response.body.data.limits.etaBufferPercent).toBeDefined();
     });
 
@@ -356,10 +356,11 @@ describe("Upfront fares (e2e)", () => {
         .set(as("admin"))
         .send({ etaBufferPercent: 99 })
         .expect(400);
+      // The early-drop threshold no longer exists: an unknown field is refused.
       await api()
         .patch("/api/v1/admin/platform-settings")
         .set(as("admin"))
-        .send({ earlyDropThresholdPercent: 5 })
+        .send({ earlyDropThresholdPercent: 70 })
         .expect(400);
       await api()
         .patch("/api/v1/admin/platform-settings")
@@ -393,7 +394,6 @@ describe("Upfront fares (e2e)", () => {
         .send({
           quoteValiditySeconds: 300,
           etaBufferPercent: 10,
-          earlyDropThresholdPercent: 70,
         })
         .expect(200);
       expect(settings.body.data.settings).toMatchObject({
@@ -617,7 +617,6 @@ describe("Upfront fares (e2e)", () => {
         quotedFare: quoted,
         total: quoted,
         waitingCharge: 0,
-        earlyDrop: false,
         capApplied: false,
       });
       // What the meter would have charged is kept for the report: far above the quote.
@@ -771,14 +770,11 @@ describe("Upfront fares (e2e)", () => {
       expect(done.fare.payableFare).toBe(quoted + 10 - 20);
     });
 
-    describe("early drop", () => {
+    describe("where the rider gets off", () => {
       /** A reliable trail covering `share` of the way, one fix a minute for the 8 minutes it took. */
       async function tripTrailTo(id: string, share: number) {
         const startedAt = new Date(Date.now() - minutes(8));
-        await rideModel.updateOne(
-          { _id: id },
-          { $set: { startedAt } },
-        );
+        await rideModel.updateOne({ _id: id }, { $set: { startedAt } });
         await checkpointModel.deleteMany({ rideId: id });
         const steps = 8;
         const rows = Array.from({ length: steps + 1 }, (_, step) => {
@@ -805,36 +801,34 @@ describe("Upfront fares (e2e)", () => {
         await placeDriver({ latitude: last[1], longitude: last[0] });
       }
 
-      it("bills the distance travelled when the rider is dropped well short of the destination", async () => {
+      it("bills the full quote even when the trip ends a third of the way, far from the destination", async () => {
         const id = await arrivedRide();
         const quoted = (await riderView(id)).fare.quotedFare as number;
         await startRide(id);
         await tripTrailTo(id, 0.35);
         const done = await endRide(id);
 
-        expect(done.fare.final.earlyDrop).toBe(true);
+        expect(done.fare.finalFare).toBe(quoted);
         expect(done.fare.final.quotedFare).toBe(quoted);
-        expect(done.fare.finalFare).toBeLessThan(quoted);
+        expect(done.fare.final.earlyDrop).toBeUndefined();
+        expect(done.fare.payableFare ?? done.fare.finalFare).toBe(quoted);
+        // The meter would have charged less for the short trip: the report sees it, the customer does not.
         const stored = (await rideModel.findById(id).lean()) as Anything;
-        expect(done.fare.finalFare).toBe(stored.fare.final.meteredEquivalent);
-        expect(done.fare.finalFare).toBeGreaterThanOrEqual(
-          stored.fare.minimumFare,
-        );
+        expect(stored.fare.final.meteredEquivalent).toBeLessThan(quoted);
         await placeDriver(NEAR_PICKUP);
       });
 
-      it("keeps the full quote when the trail covered most of the way", async () => {
+      it("bills the same quote when the trail covered nearly the whole way", async () => {
         const id = await arrivedRide();
         const quoted = (await riderView(id)).fare.quotedFare as number;
         await startRide(id);
         await tripTrailTo(id, 0.9);
         const done = await endRide(id);
-        expect(done.fare.final.earlyDrop).toBe(false);
         expect(done.fare.finalFare).toBe(quoted);
         await placeDriver(NEAR_PICKUP);
       });
 
-      it("a missing trail (GPS fault) never lowers the fare", async () => {
+      it("bills the same quote with no GPS trail at all", async () => {
         const id = await arrivedRide();
         const quoted = (await riderView(id)).fare.quotedFare as number;
         await startRide(id);
@@ -842,9 +836,7 @@ describe("Upfront fares (e2e)", () => {
           rideId: id,
           kind: { $ne: "STARTED" },
         });
-        // The driver ends the trip far from the drop-off with only the start fix on record.
         const done = await endRide(id);
-        expect(done.fare.final.earlyDrop).toBe(false);
         expect(done.fare.finalFare).toBe(quoted);
       });
     });
@@ -1004,7 +996,7 @@ describe("Upfront fares (e2e)", () => {
   // ── Report ────────────────────────────────────────────────────────────
 
   describe("quote versus actual report", () => {
-    it("summarises the upfront rides: quote, meter, what Tirvona absorbed, early drops and waiting", async () => {
+    it("summarises the upfront rides: quote, meter, what Tirvona absorbed and waiting", async () => {
       const response = await api()
         .get("/api/v1/admin/reports/fare-quotes")
         .query({ preset: "TODAY" })
@@ -1012,7 +1004,7 @@ describe("Upfront fares (e2e)", () => {
         .expect(200);
       const report = response.body.data as Anything;
       expect(report.totals.rides).toBeGreaterThanOrEqual(6);
-      expect(report.totals.earlyDrops).toBeGreaterThanOrEqual(1);
+      expect(report.totals.earlyDrops).toBeUndefined();
       expect(report.totals.waitingRides).toBeGreaterThanOrEqual(3);
       expect(report.totals.waitingCharges).toBeGreaterThanOrEqual(40);
       // The three-hour ride was billed far below the meter: Tirvona absorbed it.

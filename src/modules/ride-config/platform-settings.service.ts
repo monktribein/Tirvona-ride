@@ -38,7 +38,6 @@ export interface RadiiChanges extends Partial<FareSettings> {
 const FARE_SETTING_KEYS = [
   "quoteValiditySeconds",
   "etaBufferPercent",
-  "earlyDropThresholdPercent",
 ] as const;
 
 function fareSettingsOf(
@@ -50,9 +49,6 @@ function fareSettingsOf(
       FARE_SETTING_DEFAULTS.quoteValiditySeconds,
     etaBufferPercent:
       settings?.etaBufferPercent ?? FARE_SETTING_DEFAULTS.etaBufferPercent,
-    earlyDropThresholdPercent:
-      settings?.earlyDropThresholdPercent ??
-      FARE_SETTING_DEFAULTS.earlyDropThresholdPercent,
   };
 }
 

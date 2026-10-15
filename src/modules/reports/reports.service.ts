@@ -54,7 +54,7 @@ export interface FareQuoteRow {
   rides: number;
   /** Sum of the locked quotes, rupees. */
   quoted: number;
-  /** Sum of what was billed for the trip itself (quote, or less after an early drop), before waiting and adjustments. */
+  /** Sum of what was billed for the trip itself (the locked quote), before waiting and adjustments. */
   billed: number;
   /** Sum of what the actual trips cost at the metered tariff. */
   metered: number;
@@ -65,7 +65,6 @@ export interface FareQuoteRow {
   /** Rides billed below the meter, and how much those cost Tirvona. */
   absorbedRides: number;
   absorbed: number;
-  earlyDrops: number;
   waitingCharges: number;
   waitingRides: number;
 }
@@ -1067,7 +1066,6 @@ export class ReportsService {
       absorbed: {
         $sum: { $cond: [{ $lt: ["$variance", 0] }, "$variance", 0] },
       },
-      earlyDrops: { $sum: { $cond: ["$fare.final.earlyDrop", 1, 0] } },
       waitingCharges: { $sum: { $ifNull: ["$fare.final.waitingCharge", 0] } },
       waitingRides: {
         $sum: {
@@ -1165,7 +1163,6 @@ export class ReportsService {
         metered: 0,
         absorbedRides: 0,
         absorbed: 0,
-        earlyDrops: 0,
         waitingCharges: 0,
         waitingRides: 0,
       };
@@ -1179,7 +1176,6 @@ export class ReportsService {
         variancePercent: m.metered > 0 ? round2((variance / m.metered) * 100) : 0,
         absorbedRides: m.absorbedRides,
         absorbed: round2(m.absorbed),
-        earlyDrops: m.earlyDrops,
         waitingCharges: round2(m.waitingCharges),
         waitingRides: m.waitingRides,
       };

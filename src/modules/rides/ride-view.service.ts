@@ -53,7 +53,7 @@ export interface RideFareView {
   payableFare?: number;
   /** The frozen final bill: actual trip measured and each component (absent until completion). */
   final?: RideFinalFareView;
-  /** UPFRONT: `estimatedFare` is the locked quote and is what the ride costs (plus waiting, less an early drop). */
+  /** UPFRONT: `estimatedFare` is the locked quote and is what the ride costs (plus waiting, when the ride type charges for it). */
   pricingMode: PricingMode;
   /** UPFRONT: the locked amount; equals `estimatedFare`. */
   quotedFare?: number;

@@ -16,9 +16,7 @@ export const RIDE_MATCHING_SETTINGS_KEY = "ride-matching";
  * Upfront-fare settings live here too (absent = the defaults in
  * FARE_SETTING_DEFAULTS, so a deploy changes nothing until an admin edits them):
  * - quoteValiditySeconds: how long a quote can be confirmed;
- * - etaBufferPercent: slack added to the route ETA when quoting;
- * - earlyDropThresholdPercent: share of the booked distance below which an
- *   early-ended trip is priced on the distance actually travelled.
+ * - etaBufferPercent: slack added to the route ETA when quoting.
  */
 @Schema({ timestamps: true, collection: "platform_settings" })
 export class PlatformSettings {
@@ -46,12 +44,6 @@ export class PlatformSettings {
     max: FARE_SETTING_LIMITS.etaBufferPercent.max,
   })
   etaBufferPercent?: number;
-
-  @Prop({
-    min: FARE_SETTING_LIMITS.earlyDropThresholdPercent.min,
-    max: FARE_SETTING_LIMITS.earlyDropThresholdPercent.max,
-  })
-  earlyDropThresholdPercent?: number;
 
   @Prop({ required: true, min: 1, default: 1 })
   version!: number;

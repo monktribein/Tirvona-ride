@@ -150,7 +150,7 @@ export class AdminRideConfigController {
   @Patch("platform-settings")
   @ApiOperation({
     summary:
-      "Change the matching radius, nearby-drivers radius (km) and/or the upfront-fare settings (quote validity, ETA buffer, early-drop threshold). Live on the next request; no restart.",
+      "Change the matching radius, nearby-drivers radius (km) and/or the upfront-fare settings (quote validity, ETA buffer). Live on the next request; no restart.",
   })
   async updateSettings(
     @Body() dto: UpdatePlatformSettingsDto,

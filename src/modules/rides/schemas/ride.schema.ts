@@ -139,7 +139,7 @@ export class RideFinalFare {
   @Prop({ min: 0 })
   waitingChargeableMinutes?: number;
 
-  /** The trip ended well short of the drop-off (below the early-drop threshold) and was priced on the distance travelled. */
+  /** Legacy: rides completed while early-drop pricing existed. Never set now: an upfront ride is always billed at its quote. */
   @Prop()
   earlyDrop?: boolean;
 
@@ -316,10 +316,6 @@ export class RideFare {
   /** Waiting terms of the ride type at booking. */
   @Prop({ type: RideWaitingTermsSchema })
   waiting?: RideWaitingTerms;
-
-  /** Early-drop threshold at booking, percent of the booked distance. */
-  @Prop({ min: 0 })
-  earlyDropThresholdPercent?: number;
 
   /** Manual fare changes after completion (append-only). */
   @Prop({ type: [RideFareAdjustmentSchema], default: undefined })

@@ -76,17 +76,6 @@ export class UpdatePlatformSettingsDto {
   @Min(FARE_SETTING_LIMITS.etaBufferPercent.min)
   @Max(FARE_SETTING_LIMITS.etaBufferPercent.max)
   etaBufferPercent?: number;
-
-  @ApiPropertyOptional({
-    example: 70,
-    description:
-      "An upfront trip that ends short of this percent of the booked distance is priced on the distance travelled",
-  })
-  @whenSent()
-  @IsInt()
-  @Min(FARE_SETTING_LIMITS.earlyDropThresholdPercent.min)
-  @Max(FARE_SETTING_LIMITS.earlyDropThresholdPercent.max)
-  earlyDropThresholdPercent?: number;
 }
 
 /** Both limits at once, for creating a ride type. */

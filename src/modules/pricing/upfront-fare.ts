@@ -4,8 +4,8 @@ import type { TripMeasurement } from "./trip-meter";
 
 /**
  * How a ride type charges. UPFRONT: the fare quoted at booking is the fare
- * (plus a waiting charge, and a lower fare when the trip ends early). METERED:
- * the fare is recalculated from the actual trip at completion (capped).
+ * (plus a waiting charge when the admin has set a waiting rate). METERED: the
+ * fare is recalculated from the actual trip at completion (capped).
  */
 export enum PricingMode {
   UPFRONT = "UPFRONT",
@@ -43,20 +43,16 @@ export interface FareSettings {
   quoteValiditySeconds: number;
   /** Extra time added to the route ETA when quoting, so slower trips do not lose money. */
   etaBufferPercent: number;
-  /** A trip shorter than this share of the booked distance counts as an early drop. */
-  earlyDropThresholdPercent: number;
 }
 
 export const FARE_SETTING_DEFAULTS: FareSettings = {
   quoteValiditySeconds: 300,
   etaBufferPercent: 10,
-  earlyDropThresholdPercent: 70,
 };
 
 export const FARE_SETTING_LIMITS = {
   quoteValiditySeconds: { min: 30, max: 3_600 },
   etaBufferPercent: { min: 0, max: 50 },
-  earlyDropThresholdPercent: { min: 10, max: 95 },
 } as const;
 
 /** Route duration with the ETA buffer added; what the upfront quote is priced on. */
@@ -109,29 +105,6 @@ export function waitingCharge(
   };
 }
 
-export interface EarlyDropInput {
-  bookedDistanceMeters: number;
-  thresholdPercent: number;
-  measurement?: TripMeasurement;
-  /** ride.endCheck.farFromDestination: the trip ended well short of the drop-off. */
-  farFromDestination?: boolean;
-}
-
-/**
- * The rider got out well before the booked drop-off. Only a reliable trail
- * and a "far from destination" end both count: a GPS glitch or a patchy trail
- * must never lower a fare.
- */
-export function isEarlyDrop(input: EarlyDropInput): boolean {
-  if (!input.farFromDestination) return false;
-  if (!input.measurement?.reliable) return false;
-  if (input.bookedDistanceMeters <= 0) return false;
-  return (
-    input.measurement.distanceMeters <
-    (input.bookedDistanceMeters * input.thresholdPercent) / 100
-  );
-}
-
 export interface UpfrontFareInput {
   /** The locked fare: ride.fare.quotedFare. */
   quotedFare: number;
@@ -141,34 +114,29 @@ export interface UpfrontFareInput {
   arrivedAt?: Date;
   startedAt?: Date;
   completedAt: Date;
+  /** The GPS trail, used only to report what the meter would have charged. */
   measurement?: TripMeasurement;
-  farFromDestination?: boolean;
-  earlyDropThresholdPercent: number;
   waiting: WaitingTerms;
 }
 
 export interface UpfrontFareResult {
-  /** The fare before waiting: the quote, or less after an early drop. */
+  /** The fare before waiting: always the locked quote. */
   base: number;
-  /** The trip ended short and was billed on the distance travelled (below the quote). */
-  earlyDrop: boolean;
-  /** What the actual trip costs at the metered tariff (reporting; also the early-drop price). */
+  /** What the actual trip would have cost on the meter (reporting only: quote versus reality). */
   actual: FareBreakdown;
   actualDistanceMeters: number;
   actualDurationSeconds: number;
   distanceSource: "ACTUAL" | "BOOKED";
   waiting: WaitingResult;
-  /** The components the bill shows: the quote's, or the actual trip's after an early drop. */
-  breakdown?: FareBreakdown;
   /** base + waiting */
   total: number;
 }
 
 /**
- * Upfront ride completed → what the customer owes before any discount:
- * the locked quote (no recalculation from time or distance), or the smaller
- * metered fare of the trip actually made after an early drop, plus the
- * waiting charge as its own line.
+ * Upfront ride completed → what the customer owes before any discount: the
+ * locked quote, whatever the trip actually did (no recalculation from time,
+ * distance or where the rider got off), plus the waiting charge as its own
+ * line (zero unless the admin set a waiting rate on the ride type).
  */
 export function resolveUpfrontFare(input: UpfrontFareInput): UpfrontFareResult {
   const actualDurationSeconds = input.startedAt
@@ -189,26 +157,14 @@ export function resolveUpfrontFare(input: UpfrontFareInput): UpfrontFareResult {
     actualDistanceMeters,
     actualDurationSeconds,
   );
-  // An early drop is only recorded when it actually lowered the fare: it never
-  // charges more than the quote, even if the meter (a long wait) would.
-  const earlyDrop =
-    isEarlyDrop({
-      bookedDistanceMeters: input.bookedDistanceMeters,
-      thresholdPercent: input.earlyDropThresholdPercent,
-      measurement: input.measurement,
-      farFromDestination: input.farFromDestination,
-    }) && actual.total < input.quotedFare;
-  const base = earlyDrop ? actual.total : input.quotedFare;
   const waiting = waitingCharge(input.waiting, input.arrivedAt, input.startedAt);
   return {
-    base,
-    earlyDrop,
+    base: input.quotedFare,
     actual,
     actualDistanceMeters,
     actualDurationSeconds,
     distanceSource,
     waiting,
-    breakdown: earlyDrop ? actual : undefined,
-    total: base + waiting.charge,
+    total: input.quotedFare + waiting.charge,
   };
 }

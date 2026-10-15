@@ -27,7 +27,6 @@ stored on the same `platform_settings` document as the radii; absent = default):
 |---|---|---|---|
 | `quoteValiditySeconds` | How long a quote can be confirmed | 300 | 30–3600 |
 | `etaBufferPercent` | Slack added to the route ETA when quoting | 10 | 0–50 |
-| `earlyDropThresholdPercent` | Share of the booked distance below which an early end counts | 70 | 10–95 |
 
 Every edit is audited with the previous values.
 
@@ -64,31 +63,28 @@ the price. Metered ride types ignore them.
 
 Copied onto the ride at booking, so it finishes under the rules it was booked
 with whatever an admin edits later: `pricingMode`, `quotedFare`, `quotedAt`,
-`bufferPercent`, `waiting { freeMinutes, perMinuteRate, maxChargeMinutes }`,
-`earlyDropThresholdPercent`. Rides booked before this feature have none of these
+`bufferPercent` and `waiting { freeMinutes, perMinuteRate, maxChargeMinutes }`.
+Rides booked before this feature have none of these
 and are METERED.
 
 ### Completion (`RideLifecycleService.finish`)
 
 Upfront rides (`pricing/upfront-fare.ts`, pure and unit-tested):
 
-1. **Base** = `quotedFare`. Nothing is recalculated from time or distance.
-2. **Early drop**: if the GPS trail is *reliable*, the measured distance is below
-   the threshold of the booked distance, and the end was *far from the
-   destination* (`ride.endCheck`), the base is the smaller of the quote and
-   `calculateFare` on the trip actually made (the minimum fare still applies).
-   An unreliable or missing trail never lowers a fare, and an "early drop" is
-   only recorded when it actually lowered the price.
-3. **Waiting**: `max(0, startedAt − arrivedAt − freeMinutes)`, rounded **up** to
+1. **Base** = `quotedFare`. Nothing is recalculated from time, distance or where
+   the rider got off: the price shown at booking is the final price. (An earlier
+   version billed a trip ended below 70% of the distance on the distance travelled;
+   that rule was removed.)
+2. **Waiting**: `max(0, startedAt − arrivedAt − freeMinutes)`, rounded **up** to
    whole minutes, capped at `maxChargeMinutes`, × rate, to whole rupees. It is its
    own line on the bill.
-4. The **promo** discounts the base fare, not the waiting charge.
-5. `finalFare = base + waiting`; `payableFare = finalFare − discount`. Payments,
+3. The **promo** discounts the base fare, not the waiting charge.
+4. `finalFare = base + waiting`; `payableFare = finalFare − discount`. Payments,
    the driver's earning and commission follow from these through the existing
    code (the driver earns, and commission applies, on the waiting charge too).
 
 `ride.fare.final` gains `quotedFare`, `waitingCharge`, `waitingSeconds`,
-`waitingChargeableMinutes`, `earlyDrop`, `meteredEquivalent` (what the meter
+`waitingChargeableMinutes`, `meteredEquivalent` (what the meter
 would have charged: reporting) and `adjustmentsTotal`.
 
 Circuits are not affected (they have their own pricing and completion).
@@ -125,7 +121,7 @@ the ride completes). Customers never see it.
 `GET /admin/reports/fare-quotes?preset=…&rideType=…` (admin Reports → *Fare quotes*):
 for completed upfront rides — locked quotes, what was billed for the trip,
 what the meter would have charged, the difference (negative = Tirvona
-absorbed it), rides billed below the meter, early drops and waiting charges,
+absorbed it), rides billed below the meter and waiting charges,
 by ride type and by route (pickup and drop-off grouped into ~1 km cells, worst
 first). Use it to tune the ETA buffer and spot under-priced routes.
 
@@ -143,13 +139,13 @@ first). Use it to tune the ETA buffer and spot under-priced routes.
 ## Tests
 
 * `src/modules/pricing/upfront-fare.spec.ts`: buffer, waiting (exactly at the free
-  minutes, cap, zero rate, rounding), early drop (just under / over the threshold,
-  unreliable trail, minimum fare, never above the quote).
+  minutes, cap, zero rate, rounding), the quote holding for a slow, short or
+  GPS-less trip.
 * `test/upfront-fare.e2e-spec.ts`: defaults and metered unchanged, settings
   validation, quote on both estimate screens, `PRICE_CHANGED` (price / expiry / old
   apps), completion at the quote after a 3-hour trip, waiting (live meter, charge,
-  cap, free window, zero rate), promo on the base only, early drop (and GPS-fault
-  safety), driver earning, admin adjustments (credit, consented charge, floor,
+  cap, free window, zero rate), promo on the base only, the quote holding wherever
+  the rider gets off, driver earning, admin adjustments (credit, consented charge, floor,
   audit, refused after payment starts) and the report.
 * Flutter `test/features/rides/upfront_fare_test.dart`: models, meter maths, fare
   breakdown, booking controller and the Choose-a-ride screen (lock, price-change
@@ -165,4 +161,4 @@ first). Use it to tune the ETA buffer and spot under-priced routes.
 * **Traffic-aware routing cost** (see Rollout).
 * **Cancel after waiting**: cancellation-fee rules are unchanged; waiting does not
   count towards them.
-* **Customer-facing terms text** for waiting and early drop must be written.
+* **Customer-facing terms text** for waiting must be written.

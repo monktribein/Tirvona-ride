@@ -315,8 +315,6 @@ export class RidesService {
                 quotedAt: priced.quote.quotedAt,
                 bufferPercent: priced.quote.settings.etaBufferPercent,
                 waiting: waitingTermsOf(rideType),
-                earlyDropThresholdPercent:
-                  priced.quote.settings.earlyDropThresholdPercent,
               }
             : {}),
           ...(promo

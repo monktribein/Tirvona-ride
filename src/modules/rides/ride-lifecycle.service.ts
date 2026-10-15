@@ -14,7 +14,6 @@ import type { FinalFareMode } from "../../config/environment";
 import { measureTrip, resolveFinalFare } from "../pricing/trip-meter";
 import type { TripMeasurement } from "../pricing/trip-meter";
 import {
-  FARE_SETTING_DEFAULTS,
   PricingMode,
   WAITING_DEFAULTS,
   resolveUpfrontFare,
@@ -622,7 +621,7 @@ export class RideLifecycleService {
     const driverId = ride.driverId as Types.ObjectId;
     const completedAt = ride.endRequestedAt ?? new Date();
     const upfront = ride.fare.pricingMode === PricingMode.UPFRONT;
-    // Upfront rides need the trail even in FINAL_FARE_MODE=booked: an early drop is judged on it.
+    // Upfront rides are billed at the quote; the trail is still measured so the report can show what the meter would have charged.
     const measurement =
       (this.finalFareMode === "actual" || upfront) && ride.startedAt
         ? measureTrip(
@@ -770,10 +769,10 @@ export class RideLifecycleService {
 
   /**
    * UPFRONT: the quote the customer accepted IS the fare — no recalculation
-   * from time or distance. Exceptions, all from the terms frozen on the ride:
-   * an early drop is priced on the distance actually travelled (never above
-   * the quote), and a wait at the pickup past the free minutes is added as its
-   * own line. The promo discounts the base fare, not the waiting charge.
+   * from time, distance or where the rider got off. The only addition is a wait
+   * at the pickup past the free minutes (the terms frozen on the ride; nothing
+   * unless the admin set a waiting rate), as its own line. The promo discounts
+   * the base fare, not the waiting charge.
    */
   private priceUpfront(
     ride: RideDocument,
@@ -789,17 +788,13 @@ export class RideLifecycleService {
       startedAt: ride.startedAt,
       completedAt,
       measurement,
-      farFromDestination: ride.endCheck?.farFromDestination,
-      earlyDropThresholdPercent:
-        ride.fare.earlyDropThresholdPercent ??
-        FARE_SETTING_DEFAULTS.earlyDropThresholdPercent,
       waiting: ride.fare.waiting ?? WAITING_DEFAULTS,
     });
     const finalFare = result.total;
     const discount = ride.promo ? computeDiscount(ride.promo, result.base) : 0;
     const payableFare = Math.max(0, finalFare - discount);
-    // The bill's components: the quote's own, or the actual trip's after an early drop.
-    const components = result.breakdown ?? ride.fare;
+    // The bill's components are the quote's own.
+    const components = ride.fare;
     return {
       finalFare,
       discount,
@@ -826,7 +821,6 @@ export class RideLifecycleService {
         waitingCharge: result.waiting.charge,
         waitingSeconds: result.waiting.waitedSeconds,
         waitingChargeableMinutes: result.waiting.chargeableMinutes,
-        earlyDrop: result.earlyDrop,
         meteredEquivalent: result.actual.total,
       },
       metadata: {
@@ -841,9 +835,6 @@ export class RideLifecycleService {
               waitingCharge: result.waiting.charge,
               waitingSeconds: result.waiting.waitedSeconds,
             }
-          : {}),
-        ...(result.earlyDrop
-          ? { earlyDrop: true, meteredEquivalent: result.actual.total }
           : {}),
       },
     };

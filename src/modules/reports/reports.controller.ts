@@ -105,7 +105,7 @@ export class ReportsController {
   @Get("fare-quotes")
   @ApiOperation({
     summary:
-      "Upfront quote versus the trip actually made, per ride type and route: what the meter would have charged, what Tirvona absorbed, early drops and waiting charges",
+      "Upfront quote versus the trip actually made, per ride type and route: what the meter would have charged, what Tirvona absorbed and waiting charges",
   })
   async fareQuotes(
     @Query() query: FareQuotesQueryDto,
